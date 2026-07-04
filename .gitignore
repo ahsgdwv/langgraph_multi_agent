@@ -1,0 +1,29 @@
+# SQLite 持久化数据库
+data/*.db
+
+# 向量库（本地生成，体积大，可重建）
+data/chroma/
+
+# Agent 工具运行时输出（非源码）
+data/outputs/
+
+# 用户生成的报告（保留 README 说明）
+reports/report_*.md
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+
+# 密钥与本地配置（切勿上传）
+.env
+
+# 本地笔记
+local-docs/
+
+# 日志、临时文件
+*.log
+tmp/
