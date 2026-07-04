@@ -1,4 +1,4 @@
-"""LangGraph 图构建：经典固定流程 + Supervisor 动态调度。"""
+"""LangGraph 图：经典流程 + Supervisor 版。"""
 from __future__ import annotations
 
 import os
@@ -8,6 +8,7 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, StateGraph
 
 from agents import (
+    data_analyst_agent_node,
     dispatcher_agent_node,
     document_loader_agent_node,
     executor_agent_node,
@@ -81,6 +82,7 @@ def build_supervisor_graph(checkpointer: Optional[SqliteSaver] = None):
     workflow.add_node("human_review_dispatch", human_review_dispatch_node)
     workflow.add_node("executor", executor_agent_node)
     workflow.add_node("researcher", researcher_agent_node)
+    workflow.add_node("data_analyst", data_analyst_agent_node)
     workflow.add_node("reflection", reflection_agent_node)
     workflow.add_node("human_review_summary", human_review_summary_node)
     workflow.add_node("summary", summary_agent_node)
@@ -95,6 +97,7 @@ def build_supervisor_graph(checkpointer: Optional[SqliteSaver] = None):
             "human_review_dispatch": "human_review_dispatch",
             "executor": "executor",
             "researcher": "researcher",
+            "data_analyst": "data_analyst",
             "reflection": "reflection",
             "human_review_summary": "human_review_summary",
             "summary": "summary",
@@ -107,6 +110,7 @@ def build_supervisor_graph(checkpointer: Optional[SqliteSaver] = None):
         "human_review_dispatch",
         "executor",
         "researcher",
+        "data_analyst",
         "reflection",
         "human_review_summary",
     ):

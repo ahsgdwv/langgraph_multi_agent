@@ -1,4 +1,4 @@
-"""全局状态定义：Pydantic 业务模型 + LangGraph AgentState。"""
+"""全局状态：Pydantic 模型 + LangGraph AgentState。"""
 from __future__ import annotations
 
 import uuid
@@ -14,13 +14,11 @@ if TYPE_CHECKING:
 
 
 class SubTask(BaseModel):
-    """子任务"""
-
     task_id: str = Field(..., description="子任务 ID")
     title: str = Field(..., description="标题")
     description: str = Field(default="", description="描述")
     priority: Literal["low", "medium", "high"] = Field(default="medium")
-    assignee: Literal["executor", "researcher", "coder"] = Field(default="executor")
+    assignee: Literal["executor", "researcher", "data_analyst"] = Field(default="executor")
     status: Literal["pending", "running", "success", "failed"] = Field(default="pending")
 
 
@@ -90,14 +88,14 @@ class LLMCallLog(BaseModel):
 
 
 class RunMetrics(BaseModel):
-    """运行量化指标"""
-
     first_pass_rate: float = 0.0
     final_pass_rate: float = 0.0
     improvement_pct: float = 0.0
     llm_calls: list[LLMCallLog] = Field(default_factory=list)
     tool_calls_count: int = 0
     rag_queries: int = 0
+    skill_invocations: list[str] = Field(default_factory=list)
+    manual_minutes_saved: int = 0
 
 
 MSGPACK_SERIALIZABLE_MODELS: tuple[type[BaseModel], ...] = (
@@ -166,5 +164,5 @@ def create_initial_state(
 
 
 if __name__ == "__main__":
-    s = create_initial_state("撰写发布说明、通知团队、整理检查清单")
+    s = create_initial_state("统计渠道销量、输出SKU排行、检索陈列政策")
     print(f"thread_id={s['thread_id']}, max_retry={s['execution_flags'].max_retry}")

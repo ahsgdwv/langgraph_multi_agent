@@ -1,4 +1,4 @@
-"""Supervisor 调度 Agent：根据任务状态动态选择下一节点。"""
+"""Supervisor 关键词路由。"""
 from __future__ import annotations
 
 import re
@@ -14,6 +14,7 @@ SupervisorRoute = Literal[
     "human_review_dispatch",
     "executor",
     "researcher",
+    "data_analyst",
     "reflection",
     "human_review_summary",
     "summary",
@@ -21,16 +22,20 @@ SupervisorRoute = Literal[
 ]
 
 _RESEARCHER_KEYWORDS = re.compile(
-    r"规则|文档|政策|问答|赔付|满减|优惠券|库存|客服|售后|合规"
+    r"政策|文档|陈列|定价|合规|费用|进场|规则|FAQ|赔付"
 )
-_TOOL_KEYWORDS = re.compile(r"库存|竞品|搜索|调研|查询|预估|核算")
+_DATA_ANALYST_KEYWORDS = re.compile(
+    r"销量|销售额|同比|环比|SKU|排行|数据分析|统计|报表|SQL|pandas|整合|周报|月报|复盘|TOP|对比.*渠道|渠道.*对比|渠道.*销量"
+)
 
 
-def pick_worker_for_task(task: SubTask) -> Literal["executor", "researcher"]:
-    """按任务复杂度与关键词选择执行 Agent。"""
+def pick_worker_for_task(task: SubTask) -> Literal["executor", "researcher", "data_analyst"]:
+    """按任务关键词选择执行 Agent（政策类优先于数据统计类）。"""
     text = f"{task.title} {task.description}"
     if _RESEARCHER_KEYWORDS.search(text):
         return "researcher"
+    if _DATA_ANALYST_KEYWORDS.search(text):
+        return "data_analyst"
     return "executor"
 
 
@@ -76,7 +81,7 @@ def supervisor_agent_node(state: AgentState) -> dict:
     task_list = state.get("task_list") or []
     flags = state.get("execution_flags") or ExecutionFlags()
     detail = ""
-    if route in ("executor", "researcher") and flags.current_task_index < len(task_list):
+    if route in ("executor", "researcher", "data_analyst") and flags.current_task_index < len(task_list):
         task = task_list[flags.current_task_index]
         detail = f" -> {task.task_id}:{task.title[:30]}"
     return {

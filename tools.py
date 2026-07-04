@@ -138,12 +138,12 @@ def _build_summary(
     )
 
     lines: list[str] = [
-        "# 任务调度汇总报告",
+        "# 快消业务分析周报",
         "",
-        f"- 子任务总数：**{total}**",
-        f"- 成功：**{success_count}** | 失败：**{total - success_count}**",
+        f"- 分析项：{total} 项",
+        f"- 完成：{success_count} 项 | 未完成：{total - success_count} 项",
         "",
-        "## 子任务明细",
+        "## 分项结果",
     ]
 
     for task in task_list:
@@ -160,12 +160,11 @@ def _build_summary(
 
         lines.append(
             f"### [{task.task_id}] {task.title} {status_icon}\n"
-            f"- 优先级：{task.priority} | 负责人：{task.assignee}\n"
-            f"- 结果：{detail}"
+            f"{detail}"
         )
 
     if reflection_summary:
-        lines.extend(["", "## 反思校验", reflection_summary])
+        lines.extend(["", "## 质量复核", reflection_summary])
 
     lines.extend(["", "---", f"*报告 ID: RPT-{uuid.uuid4().hex[:8]}*"])
     return "\n".join(lines)

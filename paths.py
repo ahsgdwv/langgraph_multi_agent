@@ -15,11 +15,15 @@ TOOL_OUTPUT_DIR = PROJECT_ROOT / "data" / "outputs"
 # RAG 业务文档
 DOCUMENTS_DIR = PROJECT_ROOT / "data" / "documents"
 
+# 销售分析（CSV + SQLite）
+ANALYTICS_DIR = PROJECT_ROOT / "data" / "analytics"
+
 
 def ensure_user_dirs() -> None:
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     TOOL_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
+    ANALYTICS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def save_user_report(content: str, thread_id: str = "") -> Path:

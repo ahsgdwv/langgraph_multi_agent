@@ -1,4 +1,4 @@
-"""量化评测：重试前后通过率、LLM 调用统计。"""
+"""流程执行指标统计。"""
 from __future__ import annotations
 
 from state import AgentState, RunMetrics, TaskResult
@@ -54,7 +54,7 @@ def format_metrics_report(metrics: RunMetrics) -> str:
     total_tokens = sum(c.total_tokens for c in metrics.llm_calls)
     total_latency = sum(c.latency_ms for c in metrics.llm_calls)
     lines = [
-        "## 运行指标",
+        "## 执行统计",
         f"- 首轮通过率：**{metrics.first_pass_rate}%**",
         f"- 最终通过率：**{metrics.final_pass_rate}%**",
         f"- 重试后提升：**{metrics.improvement_pct:+.2f}%**",
@@ -63,6 +63,8 @@ def format_metrics_report(metrics: RunMetrics) -> str:
         f"- LLM 总耗时：**{total_latency:.0f} ms**",
         f"- 工具调用次数：**{metrics.tool_calls_count}**",
         f"- RAG 检索次数：**{metrics.rag_queries}**",
+        f"- Skill 调用：**{len(metrics.skill_invocations)}** 次（{', '.join(metrics.skill_invocations) or '无'}）",
+        f"- 预估节省人工：**约 {metrics.manual_minutes_saved} 分钟**",
     ]
     if metrics.llm_calls:
         lines.append("")

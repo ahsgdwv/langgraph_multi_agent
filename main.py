@@ -1,4 +1,4 @@
-"""LangGraph 多 Agent 任务调度：图构建与运行入口。"""
+"""快消数据分析 Agent：命令行入口与集成测试。"""
 from __future__ import annotations
 
 import os
@@ -166,25 +166,24 @@ def _use_test_checkpoint_db(test_name: str) -> Path:
     return path
 
 
-def test_split_seven_numbered_tasks() -> None:
+def test_split_numbered_tasks() -> None:
     from tools import _parse_user_input_to_tasks, count_expected_tasks
 
     demo = (
-        "策划电商618大促完整运营方案，需要完成全部子任务："
-        "1. 制定满减、优惠券、跨店折扣活动规则；"
-        "2. 设计首页会场、商品分会场页面布局与文案；"
-        "3. 撰写直播间带货脚本、主播话术、活动福利介绍；"
-        "4. 规划短视频宣传内容、投放平台与发布排期；"
-        "5. 整理客服常见活动问答、售后赔付规则；"
-        "6.预估活动流量、备货库存、预算成本核算；"
-        "7. 活动结束后复盘数据指标与优化方向。"
+        "元气森林华东区渠道分析，需要完成："
+        "1. 统计便利店、商超、电商、特通渠道销量与销售额对比；"
+        "2. 输出气泡水及电解质水 SKU 销售 TOP 排行；"
+        "3. 检索渠道陈列费与定价政策；"
+        "4. 整合 SQL 销售数据、pandas 统计与政策文档生成周报；"
+        "5. 查询核心 SKU 渠道库存；"
+        "6. 调研竞品无糖气泡水市场动态。"
     )
-    assert count_expected_tasks(demo) == 7
+    assert count_expected_tasks(demo) == 6
     tasks = _parse_user_input_to_tasks(demo)
-    assert len(tasks) == 7
+    assert len(tasks) == 6
     assert all(t.title for t in tasks)
-    assert "复盘" in tasks[-1].title
-    print("PASS test_split_seven_numbered_tasks")
+    assert "竞品" in tasks[-1].title
+    print("PASS test_split_numbered_tasks")
 
 
 def test_graph_node_names() -> None:
@@ -206,6 +205,7 @@ def test_supervisor_graph_nodes() -> None:
     nodes = set(app.get_graph().nodes.keys()) - {"__start__", "__end__"}
     assert "supervisor" in nodes
     assert "researcher" in nodes
+    assert "data_analyst" in nodes
     print("PASS test_supervisor_graph_nodes")
 
 
@@ -213,23 +213,55 @@ def test_rag_ingest_and_retrieve() -> None:
     from rag_store import ingest_documents, retrieve_context
 
     result = ingest_documents(force=True)
-    assert result["loaded"] >= 2
-    docs = retrieve_context("618满减规则", k=2)
+    assert result["loaded"] == 3
+    assert "genki_analysis_playbook.md" in result.get("files", [])
+    docs = retrieve_context("渠道陈列费用政策", k=2)
     assert len(docs) >= 1
-    assert any("满减" in d.content or "618" in d.content for d in docs)
+    assert len(docs[0].content) > 10
     print("PASS test_rag_ingest_and_retrieve")
 
 
 def test_external_tools() -> None:
-    from external_tools import query_activity_inventory, read_local_file, simple_web_search
+    from external_tools import query_channel_inventory, read_local_file, simple_web_search
 
-    inv = query_activity_inventory.invoke({"sku": "SKU-618-001"})
+    inv = query_channel_inventory.invoke({"sku": "YQ-001"})
     assert "stock" in inv
-    search = simple_web_search.invoke({"query": "618竞品"})
-    assert "618" in search or "竞品" in search
-    doc = read_local_file.invoke({"path": "618_activity_rules.md"})
-    assert "满减" in doc
+    search = simple_web_search.invoke({"query": "竞品气泡水"})
+    assert "竞品" in search or "气泡水" in search
+    doc = read_local_file.invoke({"path": "fmcg_channel_policy.md"})
+    assert "渠道" in doc
     print("PASS test_external_tools")
+
+
+def test_data_analytics() -> None:
+    from data_store import ensure_analytics_db, run_readonly_sql
+    from data_tools import analyze_sales_pandas, query_sales_sql
+
+    init = ensure_analytics_db()
+    assert init["rows"] >= 20
+
+    sql_out = query_sales_sql.invoke(
+        {"sql": "SELECT channel, SUM(revenue) AS revenue FROM channel_sales GROUP BY channel"}
+    )
+    assert "preview" in sql_out
+
+    pandas_out = analyze_sales_pandas.invoke({"analysis_type": "ranking", "group_by": "channel"})
+    assert "summary" in pandas_out
+    df = run_readonly_sql("SELECT COUNT(*) AS cnt FROM channel_sales")
+    assert int(df.iloc[0]["cnt"]) >= 20
+    print("PASS test_data_analytics")
+
+
+def test_skill_registry() -> None:
+    from skills import list_skills, match_and_execute_skill
+
+    skills = list_skills()
+    assert len(skills) >= 5
+    out = match_and_execute_skill("统计各渠道销量对比")
+    assert out is not None
+    assert out.skill_id == "channel_compare"
+    assert "数据概览" in out.markdown
+    print("PASS test_skill_registry")
 
 
 def test_supervisor_routing() -> None:
@@ -242,10 +274,12 @@ def test_supervisor_routing() -> None:
     state["execution_flags"] = ExecutionFlags(documents_loaded=True)
     assert decide_supervisor_route(state) == "dispatcher"
 
-    task = SubTask(task_id="T001", title="制定满减优惠券规则", description="")
+    task = SubTask(task_id="T001", title="检索渠道陈列费用政策", description="")
     assert pick_worker_for_task(task) == "researcher"
-    task2 = SubTask(task_id="T002", title="撰写直播脚本", description="")
+    task2 = SubTask(task_id="T002", title="调研竞品气泡水市场动态", description="")
     assert pick_worker_for_task(task2) == "executor"
+    task3 = SubTask(task_id="T003", title="统计各渠道销量排行", description="")
+    assert pick_worker_for_task(task3) == "data_analyst"
     print("PASS test_supervisor_routing")
 
 
@@ -314,7 +348,7 @@ def test_sqlite_checkpoint_resume() -> None:
 
     assert len(state.get("human_approvals") or []) >= 2
     assert state["execution_flags"].is_finished
-    assert "任务调度汇总报告" in state["final_output"]
+    assert "任务调度汇总报告" in state["final_output"] or "业务分析周报" in state["final_output"]
     print("PASS test_sqlite_checkpoint_resume")
 
 
@@ -326,7 +360,7 @@ def test_human_in_the_loop_interrupt() -> None:
     with get_checkpointer(db) as cp:
         app = build_graph(checkpointer=cp)
         config = make_run_config(tid)
-        initial = create_initial_state("设计架构、编写代码、联调测试", thread_id=tid)
+        initial = create_initial_state("统计渠道销量、输出SKU排行、检索陈列政策", thread_id=tid)
 
         for _ in app.stream(initial, config, stream_mode="updates"):
             pass
@@ -392,10 +426,12 @@ if __name__ == "__main__":
     print(f"checkpoint: {CHECKPOINT_DB}\n")
 
     with without_llm():
-        test_split_seven_numbered_tasks()
+        test_split_numbered_tasks()
         test_graph_node_names()
         test_supervisor_graph_nodes()
         test_rag_ingest_and_retrieve()
+        test_data_analytics()
+        test_skill_registry()
         test_external_tools()
         test_supervisor_routing()
         test_reflection_retry_with_simulated_failure()
@@ -407,13 +443,12 @@ if __name__ == "__main__":
     print("\n--- demo ---")
     os.environ["AUTO_APPROVE_HUMAN"] = "true"
     run(
-        "策划电商618大促完整运营方案，需要完成全部子任务："
-        "1. 制定满减、优惠券、跨店折扣活动规则；"
-        "2. 设计首页会场、商品分会场页面布局与文案；"
-        "3. 撰写直播间带货脚本、主播话术、活动福利介绍；"
-        "4. 规划短视频宣传内容、投放平台与发布排期；"
-        "5. 整理客服常见活动问答、售后赔付规则；"
-        "6. 预估活动流量、备货库存、预算成本核算；"
-        "7. 活动结束后复盘数据指标与优化方向。",
+        "元气森林华东区渠道分析，需要完成："
+        "1. 统计便利店、商超、电商、特通渠道销量与销售额对比；"
+        "2. 输出气泡水及电解质水 SKU 销售 TOP 排行；"
+        "3. 检索渠道陈列费与定价政策；"
+        "4. 整合 SQL 销售数据、pandas 统计与政策文档生成周报；"
+        "5. 查询核心 SKU 渠道库存；"
+        "6. 调研竞品无糖气泡水市场动态。",
         verbose=True,
     )

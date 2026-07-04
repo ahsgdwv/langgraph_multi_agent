@@ -15,9 +15,9 @@ from main import get_checkpointer, resume_run, run_until_pause_or_finish
 from rag_store import DOCS_DIR, ingest_documents, list_document_files
 
 app = FastAPI(
-    title="LangGraph Multi-Agent Scheduler",
-    description="多 Agent 任务调度 API（RAG + 工具调用 + Supervisor）",
-    version="2.0.0",
+    title="FMCG Analytics Agent API",
+    description="快消数据分析多 Agent API（Skill 资产库 + SQL/pandas + RAG + Supervisor）",
+    version="3.0.0",
 )
 
 
@@ -111,6 +111,13 @@ async def upload_document(file: UploadFile = File(...)) -> dict:
 @app.post("/documents/reload")
 def reload_documents() -> dict:
     return ingest_documents(force=True)
+
+
+@app.get("/skills")
+def list_agent_skills() -> dict:
+    from skills import list_skills
+
+    return {"count": len(list_skills()), "skills": list_skills()}
 
 
 @app.get("/documents")

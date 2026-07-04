@@ -1,4 +1,4 @@
-"""外部工具：文件读写、库存查询、模拟搜索（Function Calling）。"""
+"""外部工具：库存查询、竞品情报、文件读写。"""
 from __future__ import annotations
 
 import json
@@ -6,31 +6,32 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
+from data_tools import DATA_TOOLS, DATA_TOOL_MAP
 from paths import PROJECT_ROOT, TOOL_OUTPUT_DIR
 
 OUTPUT_DIR = TOOL_OUTPUT_DIR
 
-# 模拟 618 活动库存
+# 快消 SKU 模拟库存
 _MOCK_INVENTORY = {
-    "SKU-618-001": {"name": "爆款蓝牙耳机", "stock": 1280, "reserved": 320},
-    "SKU-618-002": {"name": "智能手环 Pro", "stock": 860, "reserved": 140},
-    "SKU-618-003": {"name": "618 限定礼盒", "stock": 420, "reserved": 95},
-    "DEFAULT": {"name": "通用活动SKU", "stock": 5000, "reserved": 800},
+    "YQ-001": {"name": "元气森林气泡水480ml", "stock": 52000, "reserved": 12000},
+    "YQ-002": {"name": "燃茶500ml", "stock": 31000, "reserved": 6500},
+    "YQ-003": {"name": "外星人电解质水", "stock": 28000, "reserved": 5800},
+    "DEFAULT": {"name": "通用饮料SKU", "stock": 45000, "reserved": 9000},
 }
 
-# 模拟搜索引擎结果库
+# 竞品与市场情报（模拟检索）
 _MOCK_SEARCH_INDEX = {
-    "618": [
-        "2025年618大促平台规则：跨店满300减50，可与店铺券叠加，上限40%。",
-        "618直播带货峰值时段：6月17日20:00-24:00，建议提前2小时预热。",
-    ],
     "竞品": [
-        "竞品A：618主打「满200减30+会员95折」，重点投放短视频。",
-        "竞品B：618采用「定金膨胀+尾款立减」，直播间专属券引流。",
+        "竞品A（0糖气泡水）：便利店铺货率提升，夏季电商礼盒装主推。",
+        "竞品B（电解质饮料）：健身房特通买2赠1，运动场景渗透加快。",
+    ],
+    "气泡水": [
+        "即饮气泡水品类年增速约12%，无糖/低糖占比持续提升。",
+        "元气森林气泡水在便利店渠道单店月均动销约180件，夏季峰值可达280件。",
     ],
     "default": [
-        "电商大促常见策略：预热种草、爆发冲刺、返场清仓三阶段。",
-        "活动复盘核心指标：GMV、ROI、转化率、客单价、退货率。",
+        "饮料快消复盘指标：动销率、渠道费比、毛利率、库存周转天数。",
+        "周报结构建议：渠道TOP/BOTTOM → SKU排行 → 异常预警 → 下周动作。",
     ],
 }
 
@@ -71,8 +72,8 @@ def write_local_file(path: str, content: str) -> str:
 
 
 @tool
-def query_activity_inventory(sku: str = "DEFAULT") -> str:
-    """查询 618 活动商品模拟库存。"""
+def query_channel_inventory(sku: str = "DEFAULT") -> str:
+    """查询快消 SKU 渠道库存（模拟 WMS 数据）。"""
     key = sku if sku in _MOCK_INVENTORY else "DEFAULT"
     item = _MOCK_INVENTORY[key]
     available = item["stock"] - item["reserved"]
@@ -83,7 +84,7 @@ def query_activity_inventory(sku: str = "DEFAULT") -> str:
             "stock": item["stock"],
             "reserved": item["reserved"],
             "available": available,
-            "suggestion": "库存充足" if available > 200 else "建议补货",
+            "suggestion": "库存充足" if available > 5000 else "建议补货",
         },
         ensure_ascii=False,
     )
@@ -91,7 +92,7 @@ def query_activity_inventory(sku: str = "DEFAULT") -> str:
 
 @tool
 def simple_web_search(query: str) -> str:
-    """模拟搜索引擎，返回与 query 相关的预设摘要（演示用）。"""
+    """模拟市场情报检索，返回竞品/品类相关摘要。"""
     query_lower = query.lower()
     hits: list[str] = []
     for key, snippets in _MOCK_SEARCH_INDEX.items():
@@ -106,11 +107,16 @@ def simple_web_search(query: str) -> str:
     )
 
 
-EXECUTOR_TOOLS = [
+# 兼容旧工具名
+query_activity_inventory = query_channel_inventory
+
+BASE_TOOLS = [
     read_local_file,
     write_local_file,
-    query_activity_inventory,
+    query_channel_inventory,
     simple_web_search,
 ]
 
+EXECUTOR_TOOLS = BASE_TOOLS + DATA_TOOLS
 TOOL_MAP = {t.name: t for t in EXECUTOR_TOOLS}
+TOOL_MAP.update(DATA_TOOL_MAP)
