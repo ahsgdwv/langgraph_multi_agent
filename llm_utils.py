@@ -6,7 +6,6 @@ import time
 from typing import Any, Optional
 
 from langchain_core.messages import BaseMessage
-from langchain_core.outputs import LLMResult
 from langchain_openai import ChatOpenAI
 
 from state import LLMCallLog, RunMetrics
@@ -37,25 +36,6 @@ def get_llm() -> Optional[ChatOpenAI]:
             temperature=0,
         )
     return None
-
-
-def _extract_usage(result: LLMResult | Any) -> tuple[int, int, int]:
-    prompt_tokens = completion_tokens = total_tokens = 0
-    if isinstance(result, LLMResult):
-        for gen_list in result.generations:
-            for gen in gen_list:
-                meta = getattr(gen, "generation_info", None) or {}
-                usage = meta.get("token_usage") or meta.get("usage") or {}
-                if usage:
-                    prompt_tokens += int(usage.get("prompt_tokens", 0) or 0)
-                    completion_tokens += int(usage.get("completion_tokens", 0) or 0)
-                    total_tokens += int(usage.get("total_tokens", 0) or 0)
-        if not total_tokens and result.llm_output:
-            usage = result.llm_output.get("token_usage") or {}
-            prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
-            completion_tokens = int(usage.get("completion_tokens", 0) or 0)
-            total_tokens = int(usage.get("total_tokens", 0) or 0)
-    return prompt_tokens, completion_tokens, total_tokens or (prompt_tokens + completion_tokens)
 
 
 def tracked_invoke(

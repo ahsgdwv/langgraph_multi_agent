@@ -147,5 +147,3 @@ def integrate_data_sources(task_description: str) -> str:
 
 
 DATA_TOOLS = [query_sales_sql, analyze_sales_pandas, integrate_data_sources]
-
-DATA_TOOL_MAP = {t.name: t for t in DATA_TOOLS}

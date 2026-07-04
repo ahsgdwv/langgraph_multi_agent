@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
-from paths import ANALYTICS_DIR, DOCUMENTS_DIR, PROJECT_ROOT, REPORTS_DIR, TOOL_OUTPUT_DIR
+from paths import ANALYTICS_DIR, PROJECT_ROOT
 
 
 @dataclass(frozen=True)
@@ -43,17 +43,9 @@ class SkillConfig:
 
 @dataclass(frozen=True)
 class AppConfig:
-    documents_dir: str = str(DOCUMENTS_DIR)
-    reports_dir: str = str(REPORTS_DIR)
-    tool_output_dir: str = str(TOOL_OUTPUT_DIR)
     rag: RagConfig = field(default_factory=RagConfig)
     analytics: AnalyticsConfig = field(default_factory=AnalyticsConfig)
     skill: SkillConfig = field(default_factory=SkillConfig)
-    llm_tool_rounds: int = 3
-    use_supervisor: bool = field(
-        default_factory=lambda: os.getenv("USE_SUPERVISOR", "true").lower()
-        in ("1", "true", "yes")
-    )
     auto_approve_human: bool = field(
         default_factory=lambda: os.getenv("AUTO_APPROVE_HUMAN", "").lower()
         in ("1", "true", "yes")

@@ -1,26 +1,11 @@
 """任务拆分与结果汇总工具。"""
 from __future__ import annotations
 
-import json
 import re
 import uuid
 from typing import Optional
 
-from langchain_core.tools import tool
-from pydantic import BaseModel, Field, ValidationError
-
 from state import ExecutionFlags, SubTask, TaskResult
-
-
-class SplitTasksInput(BaseModel):
-    user_input: str = Field(..., description="用户原始需求")
-    max_tasks: int = Field(default=10, ge=1, le=10)
-
-
-class AggregateResultsInput(BaseModel):
-    task_list_json: str
-    task_results_json: str
-    reflection_summary: Optional[str] = None
 
 
 _PREAMBLE_TRIGGERS = (
@@ -201,55 +186,3 @@ def apply_aggregate_to_state(
             need_retry=False,
         ),
     }
-
-
-@tool(args_schema=SplitTasksInput)
-def split_tasks(user_input: str, max_tasks: int = 10) -> str:
-    """将用户需求拆分为结构化子任务列表"""
-    tasks = _parse_user_input_to_tasks(user_input, max_tasks)
-    payload = {
-        "task_list": [t.model_dump() for t in tasks],
-        "execution_flags": {"planning_done": True, "current_task_index": 0},
-        "message": f"已拆分 {len(tasks)} 个子任务",
-    }
-    return json.dumps(payload, ensure_ascii=False, indent=2)
-
-
-@tool(args_schema=AggregateResultsInput)
-def aggregate_results(
-    task_list_json: str,
-    task_results_json: str,
-    reflection_summary: Optional[str] = None,
-) -> str:
-    """合并子任务与执行结果为最终报告"""
-    try:
-        raw_tasks = json.loads(task_list_json)
-        task_list = [SubTask.model_validate(t) for t in raw_tasks]
-    except (json.JSONDecodeError, ValidationError) as e:
-        return json.dumps({"error": f"task_list_json 解析失败: {e}"}, ensure_ascii=False)
-
-    try:
-        raw_results = json.loads(task_results_json)
-        task_results = {k: TaskResult.model_validate(v) for k, v in raw_results.items()}
-    except (json.JSONDecodeError, ValidationError) as e:
-        return json.dumps({"error": f"task_results_json 解析失败: {e}"}, ensure_ascii=False)
-
-    summary = _build_summary(task_list, task_results, reflection_summary)
-    payload = {
-        "final_output": summary,
-        "execution_flags": {
-            "planning_done": True,
-            "execution_done": True,
-            "reflection_done": True,
-            "is_finished": True,
-        },
-        "message": "汇总报告已生成",
-    }
-    return json.dumps(payload, ensure_ascii=False, indent=2)
-
-
-ALL_TOOLS = [split_tasks, aggregate_results]
-
-
-if __name__ == "__main__":
-    print(split_tasks.invoke({"user_input": "撰写发布说明、通知团队、整理检查清单"}))

@@ -12,7 +12,8 @@ from pydantic import BaseModel, Field
 load_dotenv()
 
 from main import get_checkpointer, resume_run, run_until_pause_or_finish
-from rag_store import DOCS_DIR, ingest_documents, list_document_files
+from paths import DOCUMENTS_DIR
+from rag_store import ingest_documents, list_document_files
 
 app = FastAPI(
     title="FMCG Analytics Agent API",
@@ -95,13 +96,13 @@ def run_task(req: RunRequest) -> RunResponse:
 
 @app.post("/documents/upload")
 async def upload_document(file: UploadFile = File(...)) -> dict:
-    DOCS_DIR.mkdir(parents=True, exist_ok=True)
+    DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
     if not file.filename:
         raise HTTPException(400, "文件名不能为空")
     suffix = Path(file.filename).suffix.lower()
     if suffix not in (".md", ".txt"):
         raise HTTPException(400, "仅支持 .md / .txt")
-    target = DOCS_DIR / file.filename
+    target = DOCUMENTS_DIR / file.filename
     content = await file.read()
     target.write_bytes(content)
     result = ingest_documents(force=True)

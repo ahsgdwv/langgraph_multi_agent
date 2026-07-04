@@ -1,5 +1,5 @@
-# SQLite 持久化数据库
-data/*.db
+# SQLite 持久化数据库（含 analytics、checkpoints 等）
+data/**/*.db
 
 # 向量库（本地生成，体积大，可重建）
 data/chroma/

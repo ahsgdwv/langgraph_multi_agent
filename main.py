@@ -348,7 +348,7 @@ def test_sqlite_checkpoint_resume() -> None:
 
     assert len(state.get("human_approvals") or []) >= 2
     assert state["execution_flags"].is_finished
-    assert "任务调度汇总报告" in state["final_output"] or "业务分析周报" in state["final_output"]
+    assert "快消业务分析周报" in state["final_output"]
     print("PASS test_sqlite_checkpoint_resume")
 
 

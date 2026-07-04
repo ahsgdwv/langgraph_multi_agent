@@ -6,7 +6,7 @@ from pathlib import Path
 
 from langchain_core.tools import tool
 
-from data_tools import DATA_TOOLS, DATA_TOOL_MAP
+from data_tools import DATA_TOOLS
 from paths import PROJECT_ROOT, TOOL_OUTPUT_DIR
 
 OUTPUT_DIR = TOOL_OUTPUT_DIR
@@ -107,9 +107,6 @@ def simple_web_search(query: str) -> str:
     )
 
 
-# 兼容旧工具名
-query_activity_inventory = query_channel_inventory
-
 BASE_TOOLS = [
     read_local_file,
     write_local_file,
@@ -119,4 +116,3 @@ BASE_TOOLS = [
 
 EXECUTOR_TOOLS = BASE_TOOLS + DATA_TOOLS
 TOOL_MAP = {t.name: t for t in EXECUTOR_TOOLS}
-TOOL_MAP.update(DATA_TOOL_MAP)

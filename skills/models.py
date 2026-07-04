@@ -12,20 +12,6 @@ class SkillOutput(BaseModel):
     data_sources: list[str] = Field(default_factory=list)
 
 
-class SkillDefinition(BaseModel):
-    id: str
-    name: str
-    description: str
-    triggers: list[str] = Field(default_factory=list)
-    output_sections: list[str] = Field(
-        default_factory=lambda: ["数据概览", "关键发现", "建议动作"]
-    )
-
-    def matches(self, text: str) -> bool:
-        import re
-        return any(re.search(p, text, re.I) for p in self.triggers)
-
-
 def format_skill_markdown(output: SkillOutput, sections: list[str]) -> str:
     lines = [f"## [{output.skill_id}] {output.skill_name}", "", output.summary, ""]
     for section in sections:
