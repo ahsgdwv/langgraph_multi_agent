@@ -13,9 +13,9 @@ OUTPUT_DIR = TOOL_OUTPUT_DIR
 
 # 快消 SKU 模拟库存
 _MOCK_INVENTORY = {
-    "YQ-001": {"name": "元气森林气泡水480ml", "stock": 52000, "reserved": 12000},
-    "YQ-002": {"name": "燃茶500ml", "stock": 31000, "reserved": 6500},
-    "YQ-003": {"name": "外星人电解质水", "stock": 28000, "reserved": 5800},
+    "SKU-001": {"name": "零糖气泡水480ml", "stock": 52000, "reserved": 12000},
+    "SKU-002": {"name": "无糖茶500ml", "stock": 31000, "reserved": 6500},
+    "SKU-003": {"name": "电解质水500ml", "stock": 28000, "reserved": 5800},
     "DEFAULT": {"name": "通用饮料SKU", "stock": 45000, "reserved": 9000},
 }
 
@@ -27,7 +27,7 @@ _MOCK_SEARCH_INDEX = {
     ],
     "气泡水": [
         "即饮气泡水品类年增速约12%，无糖/低糖占比持续提升。",
-        "元气森林气泡水在便利店渠道单店月均动销约180件，夏季峰值可达280件。",
+        "零糖气泡水在便利店渠道单店月均动销约180件，夏季峰值可达280件。",
     ],
     "default": [
         "饮料快消复盘指标：动销率、渠道费比、毛利率、库存周转天数。",

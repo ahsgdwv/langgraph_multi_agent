@@ -48,10 +48,14 @@ class ResumeRequest(BaseModel):
 def health() -> dict:
     from llm_utils import get_llm_status
 
+    from branding import get_brand_name, get_display_title
+
     return {
         "status": "ok",
         "llm": get_llm_status(),
         "supervisor": os.getenv("USE_SUPERVISOR", "true"),
+        "brand_name": get_brand_name() or None,
+        "display_title": get_display_title(),
         "documents": [p.name for p in list_document_files()],
     }
 

@@ -237,7 +237,7 @@ def _maybe_prefetch_tools(task: SubTask, metrics: RunMetrics) -> list[str]:
     text = f"{task.title} {task.description}"
     outputs: list[str] = []
     if re.search(r"库存|备货|SKU", text):
-        out = TOOL_MAP["query_channel_inventory"].invoke({"sku": "YQ-001"})
+        out = TOOL_MAP["query_channel_inventory"].invoke({"sku": "SKU-001"})
         outputs.append(f"[库存查询] {out}")
         metrics.tool_calls_count += 1
     if re.search(r"搜索|竞品|调研|市场", text):

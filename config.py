@@ -42,10 +42,19 @@ class SkillConfig:
 
 
 @dataclass(frozen=True)
+class BrandConfig:
+    """演示品牌（可选）。设置 BRAND_NAME 后 UI 标题与示例会带上品牌名。"""
+
+    name: str = field(default_factory=lambda: os.getenv("BRAND_NAME", "").strip())
+    region: str = field(default_factory=lambda: os.getenv("BRAND_REGION", "华东区").strip() or "华东区")
+
+
+@dataclass(frozen=True)
 class AppConfig:
     rag: RagConfig = field(default_factory=RagConfig)
     analytics: AnalyticsConfig = field(default_factory=AnalyticsConfig)
     skill: SkillConfig = field(default_factory=SkillConfig)
+    brand: BrandConfig = field(default_factory=BrandConfig)
     auto_approve_human: bool = field(
         default_factory=lambda: os.getenv("AUTO_APPROVE_HUMAN", "").lower()
         in ("1", "true", "yes")

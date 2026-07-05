@@ -1,6 +1,6 @@
-# 元气森林渠道数据分析 Agent
+# 快消渠道数据分析 Agent
 
-饮料快消行业里，渠道周报有大量重复劳动：拉各渠道销量、排 SKU、翻政策文档、拼成一份 Markdown。这个项目把这几步做成可跑的 Agent 流程，并用 Skill 固定输出格式，减少每次从零写提示词。
+饮料快消行业里，渠道周报有大量重复劳动：拉各渠道销量、排 SKU、翻政策文档、拼成一份 Markdown。本项目将上述流程抽象为**通用饮品快消场景**（不绑定单一品牌），做成可跑的 Agent 流程，并用 Skill 固定输出格式，减少每次从零写提示词。
 
 技术栈：Python、LangGraph、Chroma、pandas、SQLite、Gradio。
 
@@ -14,6 +14,19 @@ python main.py            # 无 LLM 的集成测试
 ```
 
 API：`uvicorn api:app --port 8000`，`GET /skills` 可查看 Skill 列表。
+
+仓库：[github.com/ahsgdwv/langgraph_multi_agent](https://github.com/ahsgdwv/langgraph_multi_agent)
+
+## 演示品牌（可选）
+
+默认使用**通用快消饮品**文案，不绑定单一品牌。如需面试/demo 时切换品牌名，在 `.env` 中设置：
+
+```bash
+BRAND_NAME=清泉饮品      # 可选，留空则为通用场景
+BRAND_REGION=华东区      # 可选，影响示例前缀
+```
+
+设置后 Gradio 标题与「完整示例」会自动变为「清泉饮品华东区渠道分析…」。
 
 ## 流程
 
@@ -70,7 +83,7 @@ rag_store.py                         Chroma 检索（含索引校验）
 ## 示例输入
 
 ```
-元气森林华东区渠道分析，需要完成：
+华东区饮品渠道分析，需要完成：
 1. 统计便利店、商超、电商、特通渠道销量与销售额对比；
 2. 输出气泡水及电解质水 SKU 销售 TOP 排行；
 3. 检索渠道陈列费与定价政策；

@@ -170,7 +170,7 @@ def test_split_numbered_tasks() -> None:
     from tools import _parse_user_input_to_tasks, count_expected_tasks
 
     demo = (
-        "元气森林华东区渠道分析，需要完成："
+        "华东区饮品渠道分析，需要完成："
         "1. 统计便利店、商超、电商、特通渠道销量与销售额对比；"
         "2. 输出气泡水及电解质水 SKU 销售 TOP 排行；"
         "3. 检索渠道陈列费与定价政策；"
@@ -214,7 +214,7 @@ def test_rag_ingest_and_retrieve() -> None:
 
     result = ingest_documents(force=True)
     assert result["loaded"] == 3
-    assert "genki_analysis_playbook.md" in result.get("files", [])
+    assert "fmcg_analysis_playbook.md" in result.get("files", [])
     docs = retrieve_context("渠道陈列费用政策", k=2)
     assert len(docs) >= 1
     assert len(docs[0].content) > 10
@@ -224,7 +224,7 @@ def test_rag_ingest_and_retrieve() -> None:
 def test_external_tools() -> None:
     from external_tools import query_channel_inventory, read_local_file, simple_web_search
 
-    inv = query_channel_inventory.invoke({"sku": "YQ-001"})
+    inv = query_channel_inventory.invoke({"sku": "SKU-001"})
     assert "stock" in inv
     search = simple_web_search.invoke({"query": "竞品气泡水"})
     assert "竞品" in search or "气泡水" in search
@@ -443,7 +443,7 @@ if __name__ == "__main__":
     print("\n--- demo ---")
     os.environ["AUTO_APPROVE_HUMAN"] = "true"
     run(
-        "元气森林华东区渠道分析，需要完成："
+        "华东区饮品渠道分析，需要完成："
         "1. 统计便利店、商超、电商、特通渠道销量与销售额对比；"
         "2. 输出气泡水及电解质水 SKU 销售 TOP 排行；"
         "3. 检索渠道陈列费与定价政策；"

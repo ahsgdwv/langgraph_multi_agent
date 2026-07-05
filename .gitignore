@@ -27,3 +27,7 @@ local-docs/
 # 日志、临时文件
 *.log
 tmp/
+
+# 本地简历 PDF（勿提交）
+实习简历*.pdf
+intern_resume*.pdf

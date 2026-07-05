@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 load_dotenv()
 os.environ.setdefault("AUTO_APPROVE_HUMAN", "true")
 
+from branding import get_display_title, get_example_analysis_prefix, get_subtitle
 from llm_utils import get_llm_status
 from main import run
 from paths import REPORTS_DIR, save_user_report
@@ -20,15 +21,19 @@ HINT_OK = "[就绪]"
 HINT_WARN = "[注意]"
 HINT_INFO = "[提示]"
 
-EXAMPLE_FMCG = (
-    "元气森林华东区渠道分析，需要完成："
-    "1. 统计便利店、商超、电商、特通渠道销量与销售额对比；"
-    "2. 输出气泡水及电解质水 SKU 销售 TOP 排行；"
-    "3. 检索渠道陈列费与定价政策；"
-    "4. 整合 SQL 销售数据、pandas 统计与政策文档生成周报；"
-    "5. 查询核心 SKU 渠道库存；"
-    "6. 调研竞品无糖气泡水市场动态。"
-)
+def _build_example_fmcg() -> str:
+    return (
+        get_example_analysis_prefix()
+        + "1. 统计便利店、商超、电商、特通渠道销量与销售额对比；"
+        "2. 输出气泡水及电解质水 SKU 销售 TOP 排行；"
+        "3. 检索渠道陈列费与定价政策；"
+        "4. 整合 SQL 销售数据、pandas 统计与政策文档生成周报；"
+        "5. 查询核心 SKU 渠道库存；"
+        "6. 调研竞品无糖气泡水市场动态。"
+    )
+
+
+EXAMPLE_FMCG = _build_example_fmcg()
 
 EXAMPLE_SIMPLE = "统计渠道销量、输出 SKU 排行、检索陈列政策"
 
@@ -185,11 +190,12 @@ def generate_report(user_input: str, max_retry: int) -> tuple[str, str, str, str
 
 
 def build_ui() -> gr.Blocks:
+    title = get_display_title()
     theme = gr.themes.Soft(primary_hue="slate")
-    with gr.Blocks(title="元气森林渠道数据分析 Agent") as demo:
+    with gr.Blocks(title=title) as demo:
         gr.Markdown(
-            "# 元气森林渠道数据分析 Agent\n"
-            "渠道销量统计 · SKU 排行 · 政策检索 · 多源整合周报\n\n"
+            f"# {title}\n"
+            f"{get_subtitle()}\n\n"
             f"LLM：{get_llm_status()}"
         )
 
