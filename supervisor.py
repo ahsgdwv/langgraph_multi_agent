@@ -1,4 +1,3 @@
-"""Supervisor 关键词路由。"""
 from __future__ import annotations
 
 import re
@@ -21,42 +20,46 @@ SupervisorRoute = Literal[
     "__end__",
 ]
 
-_RESEARCHER_KEYWORDS = re.compile(
-    r"政策|文档|陈列|定价|合规|费用|进场|规则|FAQ|赔付"
-)
-_DATA_ANALYST_KEYWORDS = re.compile(
+# 库存/备货属于执行类，优先于 SKU 等数据关键词
+_INVENTORY_KW = re.compile(r"库存|备货|补货|在库|可用库存|仓储|WMS", re.I)
+# 政策类优先于数据统计类
+_RESEARCHER_KW = re.compile(r"政策|文档|陈列|定价|合规|费用|进场|规则|FAQ|赔付")
+_DATA_ANALYST_KW = re.compile(
     r"销量|销售额|同比|环比|SKU|排行|数据分析|统计|报表|SQL|pandas|整合|周报|月报|复盘|TOP|对比.*渠道|渠道.*对比|渠道.*销量"
 )
 
 
 def pick_worker_for_task(task: SubTask) -> Literal["executor", "researcher", "data_analyst"]:
-    """按任务关键词选择执行 Agent（政策类优先于数据统计类）。"""
     text = f"{task.title} {task.description}"
-    if _RESEARCHER_KEYWORDS.search(text):
+    if _INVENTORY_KW.search(text):
+        return "executor"
+    if _RESEARCHER_KW.search(text):
         return "researcher"
-    if _DATA_ANALYST_KEYWORDS.search(text):
+    if _DATA_ANALYST_KW.search(text):
         return "data_analyst"
     return "executor"
 
 
 def decide_supervisor_route(state: AgentState) -> SupervisorRoute:
-    """Supervisor 路由决策。"""
-    flags = state.get("execution_flags") or ExecutionFlags()
-    task_list = state.get("task_list") or []
+    run_flags = state.get("execution_flags") or ExecutionFlags()
+    子任务 = state.get("task_list") or []
 
-    if not flags.documents_loaded:
+    if not run_flags.documents_loaded:
         return "document_loader"
-    if not flags.planning_done:
+    if not run_flags.planning_done:
         return "dispatcher"
-    if flags.planning_done and not _dispatch_approved(state):
+    if run_flags.planning_done and not _dispatch_approved(state):
         return "human_review_dispatch"
-    if not flags.execution_done:
-        return pick_worker_for_task(task_list[flags.current_task_index])
-    if not flags.reflection_done:
+    if not run_flags.execution_done:
+        idx = run_flags.current_task_index
+        if idx < 0 or idx >= len(子任务):
+            return "reflection"
+        return pick_worker_for_task(子任务[idx])
+    if not run_flags.reflection_done:
         return "reflection"
-    if flags.reflection_done and not _summary_approved(state):
+    if run_flags.reflection_done and not _summary_approved(state):
         return "human_review_summary"
-    if flags.is_finished:
+    if run_flags.is_finished:
         return "__end__"
     return "summary"
 
@@ -76,14 +79,17 @@ def _summary_approved(state: AgentState) -> bool:
 
 
 def supervisor_agent_node(state: AgentState) -> dict:
-    """Supervisor 节点：写入下一跳决策。"""
     route = decide_supervisor_route(state)
-    task_list = state.get("task_list") or []
-    flags = state.get("execution_flags") or ExecutionFlags()
+    子任务 = state.get("task_list") or []
+    run_flags = state.get("execution_flags") or ExecutionFlags()
+
     detail = ""
-    if route in ("executor", "researcher", "data_analyst") and flags.current_task_index < len(task_list):
-        task = task_list[flags.current_task_index]
-        detail = f" -> {task.task_id}:{task.title[:30]}"
+    if route in ("executor", "researcher", "data_analyst"):
+        idx = run_flags.current_task_index
+        if 0 <= idx < len(子任务):
+            task = 子任务[idx]
+            detail = f" -> {task.task_id}:{task.title[:30]}"
+
     return {
         "supervisor_decision": route,
         "messages": [AIMessage(content=f"[Supervisor] 路由 {route}{detail}")],

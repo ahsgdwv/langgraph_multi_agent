@@ -18,6 +18,9 @@ __pycache__/
 .venv/
 venv/
 
+# 本地代码索引
+.codebase-memory/
+
 # 密钥与本地配置（切勿上传）
 .env
 

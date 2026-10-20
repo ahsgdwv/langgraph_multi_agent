@@ -1,4 +1,3 @@
-"""任务拆分与结果汇总工具。"""
 from __future__ import annotations
 
 import re
@@ -6,7 +5,6 @@ import uuid
 from typing import Optional
 
 from state import ExecutionFlags, SubTask, TaskResult
-
 
 _PREAMBLE_TRIGGERS = (
     "以下工作：",
@@ -20,7 +18,6 @@ _PREAMBLE_TRIGGERS = (
 
 
 def _strip_preamble(text: str) -> str:
-    """去掉需求前缀，保留子任务列表正文"""
     for trigger in _PREAMBLE_TRIGGERS:
         if trigger in text:
             return text.split(trigger, 1)[1].strip()
@@ -31,7 +28,6 @@ def _strip_preamble(text: str) -> str:
 
 
 def _split_numbered_items(text: str) -> list[str]:
-    """解析「1. xxx；2. xxx」或「1、xxx；2、xxx」编号列表"""
     if len(re.findall(r"\d+[\.、]\s*", text)) < 2:
         return []
 
@@ -50,13 +46,11 @@ def _split_numbered_items(text: str) -> list[str]:
 
 
 def _split_delimited_items(text: str) -> list[str]:
-    """解析顿号/逗号/分号分隔的任务列表"""
     chunks = re.split(r"[、，,;；\n]+", text)
     return [c.strip() for c in chunks if len(c.strip()) >= 2]
 
 
 def count_expected_tasks(user_input: str, *, max_tasks: int = 10) -> int:
-    """估算用户需求中的子任务条目数，供拆分与反思校验"""
     text = _strip_preamble(user_input.strip())
     if not text:
         return 0
@@ -70,13 +64,11 @@ def count_expected_tasks(user_input: str, *, max_tasks: int = 10) -> int:
 
 
 def infer_max_tasks(user_input: str, *, ceiling: int = 10) -> int:
-    """根据输入推断应拆分的子任务上限"""
     expected = count_expected_tasks(user_input, max_tasks=ceiling)
     return max(expected, 1) if expected else ceiling
 
 
 def _parse_user_input_to_tasks(user_input: str, max_tasks: int = 10) -> list[SubTask]:
-    """将自然语言需求拆分为子任务列表"""
     raw = user_input.strip()
     if not raw:
         return []
@@ -91,12 +83,12 @@ def _parse_user_input_to_tasks(user_input: str, max_tasks: int = 10) -> list[Sub
     limit = max_tasks if max_tasks > 0 else infer_max_tasks(raw)
     chunks = chunks[:limit]
 
-    tasks: list[SubTask] = []
+    子任务: list[SubTask] = []
     for i, chunk in enumerate(chunks, start=1):
         task_id = f"T{i:03d}"
         priority: str = "high" if re.search(r"紧急|重要|优先|high", chunk, re.I) else "medium"
         title = chunk if len(chunk) <= 60 else chunk[:57] + "..."
-        tasks.append(
+        子任务.append(
             SubTask(
                 task_id=task_id,
                 title=title,
@@ -106,7 +98,7 @@ def _parse_user_input_to_tasks(user_input: str, max_tasks: int = 10) -> list[Sub
                 status="pending",
             )
         )
-    return tasks
+    return 子任务
 
 
 def _build_summary(
@@ -114,13 +106,16 @@ def _build_summary(
     task_results: dict[str, TaskResult],
     reflection_summary: Optional[str] = None,
 ) -> str:
-    """组装 Markdown 汇总报告"""
     total = len(task_list)
-    success_count = sum(
-        1
-        for t in task_list
-        if task_results.get(t.task_id, TaskResult(task_id=t.task_id, success=False)).success
-    )
+    success_count = 0
+    for t in task_list:
+        raw = task_results.get(t.task_id)
+        if isinstance(raw, dict):
+            raw = TaskResult.model_validate(raw)
+        if raw is None:
+            raw = TaskResult(task_id=t.task_id, success=False)
+        if raw.success:
+            success_count += 1
 
     lines: list[str] = [
         "# 快消业务分析周报",
@@ -133,6 +128,12 @@ def _build_summary(
 
     for task in task_list:
         result = task_results.get(task.task_id)
+        if isinstance(result, dict):
+            try:
+                result = TaskResult.model_validate(result)
+            except Exception:
+                result = None
+
         if result is None:
             status_icon = "[待执行]"
             detail = "（尚无执行结果）"
@@ -143,10 +144,7 @@ def _build_summary(
             status_icon = "[失败]"
             detail = result.error or result.output or "（未知错误）"
 
-        lines.append(
-            f"### [{task.task_id}] {task.title} {status_icon}\n"
-            f"{detail}"
-        )
+        lines.append(f"### [{task.task_id}] {task.title} {status_icon}\n{detail}")
 
     if reflection_summary:
         lines.extend(["", "## 质量复核", reflection_summary])
@@ -156,7 +154,6 @@ def _build_summary(
 
 
 def apply_split_to_state(user_input: str, max_tasks: Optional[int] = None) -> dict:
-    """拆分任务并返回 State 局部更新；max_tasks 默认按输入条目数推断"""
     limit = max_tasks if max_tasks is not None else infer_max_tasks(user_input)
     tasks = _parse_user_input_to_tasks(user_input, limit)
     return {
@@ -171,7 +168,6 @@ def apply_aggregate_to_state(
     reflection_summary: Optional[str] = None,
     current_flags: Optional[ExecutionFlags] = None,
 ) -> dict:
-    """汇总结果并返回 State 局部更新，保留 retry_count"""
     summary = _build_summary(task_list, task_results, reflection_summary)
     base = current_flags or ExecutionFlags()
     return {

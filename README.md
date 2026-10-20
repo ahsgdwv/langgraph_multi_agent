@@ -14,6 +14,22 @@ python main.py            # 无 LLM 的集成测试
 ```
 
 API：`uvicorn api:app --port 8000`，`GET /skills` 可查看 Skill 列表。
+`POST /run` 支持 `auto_approve=false` 停在人工确认点，随后调用 `POST /resume` 提交审批结果。
+
+Gradio 含两个 Tab：**周报生成**、**提示词优化**（多模板、长度对比、试跑、保存；用户模式支持「优化并生成周报」）。
+
+提示词 API：
+
+```bash
+POST /prompt/optimize   # {prompt, mode: system|user, template_id?}  # 返回 stats
+POST /prompt/iterate    # {prompt, requirements, template_id?}
+POST /prompt/test       # {prompt, mode, test_input}
+POST /prompt/compare    # {original, optimized, test_input, mode}
+POST /prompt/save       # {prompt, mode} -> data/outputs/
+GET  /prompt/templates  # ?mode=system|user|iterate
+```
+
+常用模板：`system_agent` / `system_compact` / `user_fmcg` / `iterate_shorten`。
 
 仓库：[github.com/ahsgdwv/langgraph_multi_agent](https://github.com/ahsgdwv/langgraph_multi_agent)
 
@@ -43,10 +59,11 @@ Supervisor 按关键词分流：含「政策、陈列」走 researcher；含「�
 
 ## Skill 资产库
 
-高频分析做成 5 个 Skill，用触发词匹配，输出章节固定（数据概览 / 关键发现 / 建议动作）：
+高频分析做成 6 个 Skill，用触发词匹配，输出章节固定（数据概览 / 关键发现 / 建议动作）：
 
 | Skill | 做什么 | 数据从哪来 |
 |-------|--------|------------|
+| inventory_lookup | 查询核心 SKU 库存、预留与可用量 | WMS（demo） |
 | channel_compare | 各渠道销售额对比 | SQL |
 | sku_ranking | SKU TOP 排行 | pandas |
 | sales_trend | 月度销量趋势 | pandas |
@@ -66,11 +83,13 @@ Supervisor 按关键词分流：含「政策、陈列」走 researcher；含「�
 
 ```
 config.py                            全局参数（RAG/分析库/Skill）
+prompt_optimizer.py                  提示词优化（多模板/精简/试跑/落盘）
 skills/base.py                       BaseSkill 基类 + SkillContext
-skills/builtin.py                    5 个内置 Skill 实现
+skills/builtin.py                    6 个内置 Skill 实现
 agents.py / graph.py / supervisor.py LangGraph 节点与路由
-data_store.py / data_tools.py        SQLite + pandas
+data_store.py                        SQLite + pandas
 rag_store.py                         Chroma 检索（含索引校验）
+ui.py                                Gradio：周报生成 + 提示词优化
 ```
 
 ## 开发笔记

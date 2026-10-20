@@ -27,3 +27,7 @@ python-multipart>=0.0.9
 
 pandas>=2.0.0
 
+# 运行时依赖（部分环境里不会自动带入）
+packaging>=24.0
+python-dateutil>=2.8.2
+

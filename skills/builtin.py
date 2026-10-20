@@ -1,8 +1,11 @@
-"""内置 Skill 实现，均继承 BaseSkill。"""
 from __future__ import annotations
+
+import json
+import re
 
 from config import CFG
 from data_store import load_sales_dataframe, run_readonly_sql
+from external_tools import query_channel_inventory
 from rag_store import format_retrieved_context, retrieve_context
 from skills.base import BaseSkill, SkillContext
 from skills.models import SkillOutput
@@ -19,7 +22,7 @@ def _table_md(records: list[dict], columns: list[str] | None = None) -> str:
     return "\n".join([header, sep, *rows])
 
 
-def _make_output(skill: BaseSkill, summary: str, sections: dict[str, str], sources: list[str]) -> SkillOutput:
+def _pack(skill: BaseSkill, summary: str, sections: dict[str, str], sources: list[str]) -> SkillOutput:
     return SkillOutput(
         skill_id=skill.skill_id,
         skill_name=skill.name,
@@ -28,6 +31,44 @@ def _make_output(skill: BaseSkill, summary: str, sections: dict[str, str], sourc
         markdown="",
         data_sources=sources,
     )
+
+
+class InventoryLookupSkill(BaseSkill):
+    skill_id = "inventory_lookup"
+    name = "渠道库存查询"
+    description = "查询核心 SKU 的库存、预留与可用量"
+    triggers = [r"库存", r"备货", r"补货", r"在库", r"可用库存", r"仓储", r"WMS"]
+    output_sections = ["库存概览", "风险提示", "建议动作"]
+    priority = 50
+
+    def _execute(self, text: str, ctx: SkillContext) -> SkillOutput:
+        sku_match = re.search(r"SKU-\d{3,}", text, re.I)
+        sku = sku_match.group(0).upper() if sku_match else "DEFAULT"
+        raw = query_channel_inventory.invoke({"sku": sku})
+        data = json.loads(raw)
+        available = int(data["available"])
+        row = {
+            "SKU": data["sku"],
+            "产品": data["name"],
+            "库存": data["stock"],
+            "预留": data["reserved"],
+            "可用": available,
+        }
+        risk = (
+            f"- 可用库存 {available:,}，低于 5,000 的安全线，建议尽快补货"
+            if available <= 5000
+            else f"- 可用库存 {available:,}，当前库存充足"
+        )
+        return _pack(
+            self,
+            f"{data['name']} 可用库存 {available:,}",
+            {
+                "库存概览": _table_md([row]),
+                "风险提示": risk,
+                "建议动作": f"- {data['suggestion']}\n- 结合渠道动销复核补货节奏",
+            },
+            ["wms"],
+        )
 
 
 class ChannelCompareSkill(BaseSkill):
@@ -45,10 +86,12 @@ class ChannelCompareSkill(BaseSkill):
         records = df.to_dict(orient="records")
         if not records:
             raise ValueError("销售库无渠道数据")
+
         leader = records[0]
         total = sum(r["revenue"] for r in records)
         share = leader["revenue"] / total * 100 if total else 0
-        return _make_output(
+
+        return _pack(
             self,
             f"对比 {len(records)} 个渠道",
             {
@@ -85,8 +128,9 @@ class SkuRankingSkill(BaseSkill):
         records = df.to_dict(orient="records")
         if not records:
             raise ValueError("销售库无 SKU 数据")
+
         top = records[0]
-        return _make_output(
+        return _pack(
             self,
             f"输出 TOP{len(records)} SKU",
             {
@@ -118,12 +162,14 @@ class SalesTrendSkill(BaseSkill):
         records = df.to_dict(orient="records")
         if not records:
             raise ValueError("销售库无月度数据")
+
         peak = df.loc[df["revenue"].idxmax()]
         growth = (
             (df["revenue"].iloc[-1] - df["revenue"].iloc[0]) / df["revenue"].iloc[0] * 100
             if len(df) > 1 else 0
         )
-        return _make_output(
+
+        return _pack(
             self,
             f"覆盖 {len(df)} 个月",
             {
@@ -149,7 +195,8 @@ class PolicyLookupSkill(BaseSkill):
         docs = retrieve_context(text, k=CFG.rag.default_k)
         rag_text = format_retrieved_context(docs)
         sources = [d.source for d in docs]
-        return _make_output(
+
+        return _pack(
             self,
             f"检索到 {len(docs)} 条片段",
             {
@@ -182,9 +229,11 @@ class IntegratedReportSkill(BaseSkill):
         )
         docs = retrieve_context(text, k=CFG.rag.default_k)
         rag_text = format_retrieved_context(docs)
+
         if channel_df.empty or sku_df.empty:
             raise ValueError("整合报告缺少销售数据")
-        return _make_output(
+
+        return _pack(
             self,
             "完成三源整合",
             {
@@ -204,6 +253,7 @@ class IntegratedReportSkill(BaseSkill):
 
 
 _BUILTIN_SKILLS: list[BaseSkill] = [
+    InventoryLookupSkill(),
     ChannelCompareSkill(),
     SkuRankingSkill(),
     SalesTrendSkill(),

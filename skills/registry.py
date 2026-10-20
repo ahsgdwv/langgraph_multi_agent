@@ -27,13 +27,16 @@ def list_skills() -> list[dict[str, Any]]:
 
 def match_and_execute_skill(text: str, ctx: SkillContext | None = None) -> SkillOutput | None:
     ctx = ctx or SkillContext()
-    best: tuple[int, BaseSkill] | None = None
+    winner: tuple[int, int, BaseSkill] | None = None
+
     for skill in _REGISTRY.values():
         if not skill.matches(text):
             continue
-        score = skill.score(text)
-        if best is None or score > best[0]:
-            best = (score, skill)
-    if best is None:
+        hits = skill.score(text)
+        rank = (hits, skill.priority)
+        if winner is None or rank > (winner[0], winner[1]):
+            winner = (hits, skill.priority, skill)
+
+    if winner is None:
         return None
-    return best[1].run(text, ctx)
+    return winner[2].run(text, ctx)

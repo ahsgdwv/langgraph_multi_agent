@@ -1,180 +1,206 @@
 from __future__ import annotations
 
+import hashlib
 import logging
+import math
+import os
+import re
 import shutil
 from pathlib import Path
-from typing import Optional
+
+from langchain_core.embeddings import Embeddings
 
 from config import CFG
 from paths import DOCUMENTS_DIR
 from state import RetrievedDoc
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
+chroma_path = Path(CFG.rag.chroma_dir)
+_chroma = None
 
-CHROMA_DIR = Path(CFG.rag.chroma_dir)
-_vectorstore = None
+
+class HashingEmbeddings(Embeddings):
+    """无外部依赖的确定性特征哈希 embedding，避免离线时退回随机向量。"""
+
+    _token_re = re.compile(r"[a-z0-9]+|[\u4e00-\u9fff]")
+
+    def __init__(self, size: int = 384):
+        self.size = size
+
+    def _embed(self, text: str) -> list[float]:
+        normalized = (text or "").lower()
+        tokens = self._token_re.findall(normalized)
+        chars = [t for t in tokens if len(t) == 1 and "\u4e00" <= t <= "\u9fff"]
+        grams = tokens + ["".join(chars[i : i + 2]) for i in range(len(chars) - 1)]
+        vector = [0.0] * self.size
+        for token in grams:
+            digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
+            vector[int.from_bytes(digest, "big") % self.size] += 1.0
+        norm = math.sqrt(sum(v * v for v in vector)) or 1.0
+        return [v / norm for v in vector]
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [self._embed(text) for text in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._embed(text)
 
 
-def _get_embeddings():
-    import os
-    openai_key = os.getenv("OPENAI_API_KEY")
-    if openai_key:
+def _embed_fn():
+    if os.getenv("OPENAI_API_KEY"):
         from langchain_openai import OpenAIEmbeddings
-        return OpenAIEmbeddings(api_key=openai_key)
-    from langchain_community.embeddings import FakeEmbeddings
-    return FakeEmbeddings(size=384)
+        return OpenAIEmbeddings(api_key=os.getenv("OPENAI_API_KEY"))
+    return HashingEmbeddings(size=384)
 
 
 def get_vectorstore():
-    global _vectorstore
-    if _vectorstore is not None:
-        return _vectorstore
+    global _chroma
+    if _chroma is not None:
+        return _chroma
     try:
         from langchain_chroma import Chroma
     except ImportError:
         from langchain_community.vectorstores import Chroma
-    CHROMA_DIR.mkdir(parents=True, exist_ok=True)
-    _vectorstore = Chroma(
-        persist_directory=str(CHROMA_DIR),
-        embedding_function=_get_embeddings(),
+    chroma_path.mkdir(parents=True, exist_ok=True)
+    _chroma = Chroma(
+        persist_directory=str(chroma_path),
+        embedding_function=_embed_fn(),
         collection_name=CFG.rag.collection_name,
     )
-    return _vectorstore
+    return _chroma
 
 
-def reset_vectorstore() -> None:
-    global _vectorstore
-    _vectorstore = None
+def reset_vectorstore():
+    global _chroma
+    _chroma = None
 
 
-def list_document_files() -> list[Path]:
+def list_document_files():
     DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
-    files: list[Path] = []
-    for pattern in ("*.md", "*.txt"):
-        files.extend(DOCUMENTS_DIR.glob(pattern))
-    return sorted(files)
+    found = []
+    for pat in ("*.md", "*.txt"):
+        found.extend(DOCUMENTS_DIR.glob(pat))
+    return sorted(found)
 
 
-def _valid_doc_names() -> set[str]:
+def _disk_names():
     return {p.name for p in list_document_files()}
 
 
-def _indexed_sources(store) -> set[str]:
+def _index_names(store):
     try:
-        data = store._collection.get(include=["metadatas"])
-        metas = data.get("metadatas") or []
+        raw = store._collection.get(include=["metadatas"])
+        metas = raw.get("metadatas") or []
         return {str(m.get("source")) for m in metas if m and m.get("source")}
-    except Exception as exc:
-        logger.warning("读取向量库索引失败: %s", exc)
+    except Exception as e:
+        log.warning("读索引名失败: %s", e)
         return set()
 
 
-def _needs_reindex(store, files: list[Path]) -> bool:
-    return {p.name for p in files} != _indexed_sources(store)
-
-
-def ingest_documents(*, force: bool = False) -> dict:
-    global _vectorstore
+def ingest_documents(*, force=False):
+    global _chroma
     from langchain_core.documents import Document
     from langchain_text_splitters import RecursiveCharacterTextSplitter
 
     files = list_document_files()
     if not files:
-        return {"loaded": 0, "chunks": 0, "message": "无文档可加载", "ok": False}
+        return {"loaded": 0, "chunks": 0, "message": "没文档", "ok": False}
 
     try:
-        store = get_vectorstore()
-        existing = store._collection.count()
-    except Exception as exc:
-        logger.warning("向量库不可用，尝试重建: %s", exc)
-        existing = 0
+        vs = get_vectorstore()
+        n = vs._collection.count()
+    except Exception as e:
+        log.warning("向量库坏了，重建: %s", e)
+        n = 0
         force = True
 
-    if existing > 0 and not force and not _needs_reindex(store, files):
-        return {
-            "loaded": len(files),
-            "chunks": existing,
-            "message": f"向量库已有 {existing} 条",
-            "ok": True,
-        }
+    if n > 0 and not force and _disk_names() == _index_names(vs):
+        return {"loaded": len(files), "chunks": n, "message": f"已有 {n} 条", "ok": True}
 
-    if force or (existing > 0 and _needs_reindex(store, files)):
+    if force or (n > 0 and _disk_names() != _index_names(vs)):
         reset_vectorstore()
-        if CHROMA_DIR.exists():
-            shutil.rmtree(CHROMA_DIR, ignore_errors=True)
-        CHROMA_DIR.mkdir(parents=True, exist_ok=True)
-        store = get_vectorstore()
+        if chroma_path.exists():
+            shutil.rmtree(chroma_path, ignore_errors=True)
+        chroma_path.mkdir(parents=True, exist_ok=True)
+        vs = get_vectorstore()
 
-    docs: list[Document] = []
-    for path in files:
+    docs = []
+    for fp in files:
         try:
-            text = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            logger.error("读取文档失败 %s: %s", path.name, exc)
+            txt = fp.read_text(encoding="utf-8")
+        except OSError as e:
+            log.error("读 %s 失败: %s", fp.name, e)
             continue
-        docs.append(Document(page_content=text, metadata={"source": path.name, "path": str(path)}))
+        if not txt.strip():
+            continue
+        docs.append(Document(page_content=txt, metadata={"source": fp.name, "path": str(fp)}))
 
     if not docs:
-        return {"loaded": 0, "chunks": 0, "message": "文档均无法读取", "ok": False}
+        return {"loaded": 0, "chunks": 0, "message": "全读失败", "ok": False}
 
-    splitter = RecursiveCharacterTextSplitter(
-        chunk_size=CFG.rag.chunk_size,
-        chunk_overlap=CFG.rag.chunk_overlap,
-    )
+    splitter = RecursiveCharacterTextSplitter(chunk_size=CFG.rag.chunk_size, chunk_overlap=CFG.rag.chunk_overlap)
     chunks = splitter.split_documents(docs)
     if chunks:
-        store.add_documents(chunks)
+        vs.add_documents(chunks)
+    print(f"[rag] ingest {len(docs)} files -> {len(chunks)} chunks")
 
     return {
         "loaded": len(docs),
         "chunks": len(chunks),
-        "files": [p.name for p in files if p.exists()],
-        "message": f"已入库 {len(docs)} 个文件，{len(chunks)} 个片段",
+        "files": [f.name for f in files],
+        "message": f"入库 {len(docs)} 文件",
         "ok": True,
     }
 
 
-def retrieve_context(query: str, *, k: Optional[int] = None) -> list[RetrievedDoc]:
-    k = k or CFG.rag.default_k
-    valid = _valid_doc_names()
+def retrieve_context(query: str, *, k=None) -> list[RetrievedDoc]:
+    topk = k or CFG.rag.default_k
+    if not query or not query.strip():
+        return []
+    allowed = _disk_names()
+
     try:
-        store = get_vectorstore()
-        count = store._collection.count()
-    except Exception as exc:
-        logger.warning("检索前向量库异常: %s", exc)
+        vs = get_vectorstore()
+        cnt = vs._collection.count()
+    except Exception as e:
+        log.warning("检索前库异常: %s", e)
         return []
 
-    if count == 0:
-        result = ingest_documents()
-        if not result.get("ok"):
+    if cnt == 0:
+        ing = ingest_documents()
+        if not ing.get("ok"):
             return []
         try:
-            count = get_vectorstore()._collection.count()
+            cnt = get_vectorstore()._collection.count()
         except Exception:
             return []
 
     try:
-        results = store.similarity_search_with_score(query, k=k)
-    except Exception as exc:
-        logger.warning("检索失败: %s", exc)
+        hits = vs.similarity_search_with_score(query, k=max(topk * 3, topk))
+    except Exception as e:
+        log.warning("检索挂了: %s", e)
         return []
 
-    docs: list[RetrievedDoc] = []
-    for doc, score in results:
-        source = str(doc.metadata.get("source", "unknown"))
-        if source not in valid:
+    out: list[RetrievedDoc] = []
+    seen: set[tuple[str, str]] = set()
+    for page, score in hits:
+        src = str(page.metadata.get("source", "unknown"))
+        if allowed and src not in allowed:
             continue
-        docs.append(
-            RetrievedDoc(
-                source=source,
-                content=doc.page_content,
-                score=round(float(score), 4),
-            )
-        )
-    return docs
+        key = (src, page.page_content.strip()[:240])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(RetrievedDoc(source=src, content=page.page_content, score=round(float(score), 4)))
+        if len(out) >= topk:
+            break
+    return out
 
 
 def format_retrieved_context(docs: list[RetrievedDoc]) -> str:
     if not docs:
         return "（未检索到相关业务文档）"
-    return "\n\n".join(f"[{i}] 来源:{d.source}\n{d.content}" for i, d in enumerate(docs, 1))
+    lines = []
+    for i, d in enumerate(docs, 1):
+        lines.append(f"[{i}] 来源:{d.source}\n{d.content}")
+    return "\n\n".join(lines)

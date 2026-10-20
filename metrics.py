@@ -1,4 +1,3 @@
-"""流程执行指标统计。"""
 from __future__ import annotations
 
 from state import AgentState, RunMetrics, TaskResult
@@ -9,37 +8,44 @@ def _as_result(raw: TaskResult | dict | None, task_id: str) -> TaskResult:
         return TaskResult(task_id=task_id, success=False)
     if isinstance(raw, TaskResult):
         return raw
-    return TaskResult.model_validate(raw)
+    try:
+        return TaskResult.model_validate(raw)
+    except Exception:
+        # 老 checkpoint 里偶尔是纯 dict，字段不全就兜底
+        return TaskResult(
+            task_id=task_id,
+            success=bool(raw.get("success")),
+            output=str(raw.get("output") or ""),
+            error=raw.get("error"),
+        )
 
 
 def snapshot_pass_rate(state: AgentState) -> float:
-    """当前任务成功率（0-100）。"""
-    tasks = state.get("task_list") or []
+    子任务 = state.get("task_list") or []
     results = state.get("task_results") or {}
-    if not tasks:
+    if not 子任务:
         return 0.0
     ok = sum(
-        1 for t in tasks if _as_result(results.get(t.task_id), t.task_id).success
+        1 for t in 子任务 if _as_result(results.get(t.task_id), t.task_id).success
     )
-    return round(ok / len(tasks) * 100, 2)
+    return round(ok / len(子任务) * 100, 2)
 
 
 def compute_run_metrics(state: AgentState, metrics: RunMetrics) -> RunMetrics:
-    """在流程结束时计算重试提升指标。"""
-    tasks = state.get("task_list") or []
+    子任务 = state.get("task_list") or []
     results = state.get("task_results") or {}
-    total = len(tasks)
+    total = len(子任务)
     if total == 0:
         return metrics
 
     final_ok = sum(
-        1 for t in tasks if _as_result(results.get(t.task_id), t.task_id).success
+        1 for t in 子任务 if _as_result(results.get(t.task_id), t.task_id).success
     )
     metrics.final_pass_rate = round(final_ok / total * 100, 2)
 
-    flags = state.get("execution_flags")
-    retry_count = flags.retry_count if flags else 0
-    if retry_count > 0 and metrics.first_pass_rate > 0:
+    run_flags = state.get("execution_flags")
+    retry_count = run_flags.retry_count if run_flags else 0
+    if retry_count > 0:
         metrics.improvement_pct = round(
             metrics.final_pass_rate - metrics.first_pass_rate, 2
         )

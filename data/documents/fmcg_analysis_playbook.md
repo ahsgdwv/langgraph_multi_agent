@@ -32,6 +32,12 @@
 - 输出固定章节：数据概览 → 关键发现 → 建议动作
 - 对应 Skill：`integrated_report`
 
+### 6. 库存与备货
+- 输入：SKU + 渠道
+- 输出：库存、预留、可用量、补货建议
+- 数据源：WMS / 渠道库存
+- 对应 Skill：`inventory_lookup`
+
 ## 业务关键词（触发 Skill）
 
 | 关键词 | 建议 Skill |
@@ -41,6 +47,7 @@
 | 趋势、环比、月度 | sales_trend |
 | 政策、陈列、费用 | policy_lookup |
 | 整合、周报、复盘 | integrated_report |
+| 库存、备货、补货 | inventory_lookup |
 
 ## 人工复核要点
 

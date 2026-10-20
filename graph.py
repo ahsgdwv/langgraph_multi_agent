@@ -1,4 +1,3 @@
-"""LangGraph 图：经典流程 + Supervisor 版。"""
 from __future__ import annotations
 
 import os
@@ -23,13 +22,13 @@ from supervisor import decide_supervisor_route, supervisor_agent_node
 
 
 def route_after_executor(state: AgentState) -> Literal["executor", "reflection"]:
-    flags = state.get("execution_flags") or ExecutionFlags()
-    return "reflection" if flags.execution_done else "executor"
+    run_flags = state.get("execution_flags") or ExecutionFlags()
+    return "reflection" if run_flags.execution_done else "executor"
 
 
 def route_after_reflection(state: AgentState) -> Literal["executor", "human_review_summary"]:
-    flags = state.get("execution_flags") or ExecutionFlags()
-    if flags.need_retry and not flags.execution_done:
+    run_flags = state.get("execution_flags") or ExecutionFlags()
+    if run_flags.need_retry and not run_flags.execution_done:
         return "executor"
     return "human_review_summary"
 
@@ -39,56 +38,54 @@ def route_supervisor(state: AgentState) -> str:
 
 
 def build_graph(checkpointer: Optional[SqliteSaver] = None):
-    """经典固定流程（含文档加载）。"""
     return _build_classic_simple(checkpointer)
 
 
 def _build_classic_simple(checkpointer: Optional[SqliteSaver] = None):
-    workflow = StateGraph(AgentState)
-    workflow.add_node("document_loader", document_loader_agent_node)
-    workflow.add_node("dispatcher", dispatcher_agent_node)
-    workflow.add_node("human_review_dispatch", human_review_dispatch_node)
-    workflow.add_node("executor", executor_agent_node)
-    workflow.add_node("reflection", reflection_agent_node)
-    workflow.add_node("human_review_summary", human_review_summary_node)
-    workflow.add_node("summary", summary_agent_node)
+    g = StateGraph(AgentState)
+    g.add_node("document_loader", document_loader_agent_node)
+    g.add_node("dispatcher", dispatcher_agent_node)
+    g.add_node("human_review_dispatch", human_review_dispatch_node)
+    g.add_node("executor", executor_agent_node)
+    g.add_node("reflection", reflection_agent_node)
+    g.add_node("human_review_summary", human_review_summary_node)
+    g.add_node("summary", summary_agent_node)
 
-    workflow.set_entry_point("document_loader")
-    workflow.add_edge("document_loader", "dispatcher")
-    workflow.add_edge("dispatcher", "human_review_dispatch")
-    workflow.add_edge("human_review_dispatch", "executor")
-    workflow.add_conditional_edges(
+    g.set_entry_point("document_loader")
+    g.add_edge("document_loader", "dispatcher")
+    g.add_edge("dispatcher", "human_review_dispatch")
+    g.add_edge("human_review_dispatch", "executor")
+    g.add_conditional_edges(
         "executor",
         route_after_executor,
         {"executor": "executor", "reflection": "reflection"},
     )
-    workflow.add_conditional_edges(
+    g.add_conditional_edges(
         "reflection",
         route_after_reflection,
         {"executor": "executor", "human_review_summary": "human_review_summary"},
     )
-    workflow.add_edge("human_review_summary", "summary")
-    workflow.add_edge("summary", END)
-    return workflow.compile(checkpointer=checkpointer)
+    g.add_edge("human_review_summary", "summary")
+    g.add_edge("summary", END)
+    return g.compile(checkpointer=checkpointer)
 
 
 def build_supervisor_graph(checkpointer: Optional[SqliteSaver] = None):
-    """Supervisor 动态多 Agent 调度图。"""
-    workflow = StateGraph(AgentState)
+    g = StateGraph(AgentState)
 
-    workflow.add_node("supervisor", supervisor_agent_node)
-    workflow.add_node("document_loader", document_loader_agent_node)
-    workflow.add_node("dispatcher", dispatcher_agent_node)
-    workflow.add_node("human_review_dispatch", human_review_dispatch_node)
-    workflow.add_node("executor", executor_agent_node)
-    workflow.add_node("researcher", researcher_agent_node)
-    workflow.add_node("data_analyst", data_analyst_agent_node)
-    workflow.add_node("reflection", reflection_agent_node)
-    workflow.add_node("human_review_summary", human_review_summary_node)
-    workflow.add_node("summary", summary_agent_node)
+    g.add_node("supervisor", supervisor_agent_node)
+    g.add_node("document_loader", document_loader_agent_node)
+    g.add_node("dispatcher", dispatcher_agent_node)
+    g.add_node("human_review_dispatch", human_review_dispatch_node)
+    g.add_node("executor", executor_agent_node)
+    g.add_node("researcher", researcher_agent_node)
+    g.add_node("data_analyst", data_analyst_agent_node)
+    g.add_node("reflection", reflection_agent_node)
+    g.add_node("human_review_summary", human_review_summary_node)
+    g.add_node("summary", summary_agent_node)
 
-    workflow.set_entry_point("supervisor")
-    workflow.add_conditional_edges(
+    g.set_entry_point("supervisor")
+    g.add_conditional_edges(
         "supervisor",
         route_supervisor,
         {
@@ -114,10 +111,10 @@ def build_supervisor_graph(checkpointer: Optional[SqliteSaver] = None):
         "reflection",
         "human_review_summary",
     ):
-        workflow.add_edge(node, "supervisor")
+        g.add_edge(node, "supervisor")
 
-    workflow.add_edge("summary", END)
-    return workflow.compile(checkpointer=checkpointer)
+    g.add_edge("summary", END)
+    return g.compile(checkpointer=checkpointer)
 
 
 def get_app(checkpointer: Optional[SqliteSaver] = None):

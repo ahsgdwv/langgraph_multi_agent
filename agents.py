@@ -1,4 +1,3 @@
-"""LangGraph 节点：文档加载、拆分、执行、复核、汇总。"""
 from __future__ import annotations
 
 import json
@@ -12,11 +11,13 @@ from langgraph.types import interrupt
 from pydantic import BaseModel
 
 from config import CFG
-from external_tools import EXECUTOR_TOOLS, TOOL_MAP
 from data_store import ensure_analytics_db
-from llm_utils import get_llm, get_llm_status, tracked_invoke
+from external_tools import EXECUTOR_TOOLS, TOOL_MAP
+from llm_utils import get_llm, tracked_invoke
 from metrics import compute_run_metrics, format_metrics_report, snapshot_pass_rate
 from rag_store import format_retrieved_context, ingest_documents, retrieve_context
+from skills import match_and_execute_skill
+from skills.base import skill_context_from_state
 from state import (
     AgentState,
     ExecutionFlags,
@@ -28,39 +29,24 @@ from state import (
 )
 from supervisor import pick_worker_for_task
 from tools import apply_aggregate_to_state, apply_split_to_state, count_expected_tasks
-from skills import match_and_execute_skill
-from skills.base import skill_context_from_state
 
 T = TypeVar("T", bound=BaseModel)
 
-__all__ = [
-    "document_loader_agent_node",
-    "dispatcher_agent_node",
-    "human_review_dispatch_node",
-    "executor_agent_node",
-    "researcher_agent_node",
-    "data_analyst_agent_node",
-    "reflection_agent_node",
-    "human_review_summary_node",
-    "summary_agent_node",
-]
 
-
-def _parse_json_from_text(text: str) -> dict[str, Any]:
+def extract_json_object(text: str) -> dict[str, Any]:
     text = text.strip()
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-    if match:
-        text = match.group(1).strip()
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+    if fenced:
+        text = fenced.group(1).strip()
     return json.loads(text)
 
 
-def _invoke_structured_json(
+def call_llm_for_model(
     llm: ChatOpenAI, model_cls: type[T], messages: list[BaseMessage], metrics: RunMetrics
 ) -> T:
     schema = json.dumps(model_cls.model_json_schema(), ensure_ascii=False)
-    system = messages[0]
-    rest = messages[1:]
-    structured_messages = [
+    system, *rest = messages
+    prompt = [
         SystemMessage(
             content=(
                 f"{system.content}\n\n"
@@ -70,30 +56,28 @@ def _invoke_structured_json(
         ),
         *rest,
     ]
-    response = tracked_invoke(llm, structured_messages, node="reflection", metrics=metrics)
-    content = response.content
-    if not isinstance(content, str):
-        content = str(content)
-    return model_cls.model_validate(_parse_json_from_text(content))
+    response = tracked_invoke(llm, prompt, node="reflection", metrics=metrics)
+    content = response.content if isinstance(response.content, str) else str(response.content)
+    return model_cls.model_validate(extract_json_object(content))
 
 
-def _merge_flags(state: AgentState, **kwargs) -> ExecutionFlags:
+def update_execution_flags(state: AgentState, **changes) -> ExecutionFlags:
     current = state.get("execution_flags") or ExecutionFlags()
     if isinstance(current, dict):
         current = ExecutionFlags.model_validate(current)
-    data = current.model_dump()
-    data.update(kwargs)
-    return ExecutionFlags(**data)
+    merged = current.model_dump()
+    merged.update(changes)
+    return ExecutionFlags(**merged)
 
 
-def _get_metrics(state: AgentState) -> RunMetrics:
+def run_metrics(state: AgentState) -> RunMetrics:
     raw = state.get("run_metrics") or RunMetrics()
     if isinstance(raw, dict):
         return RunMetrics.model_validate(raw)
     return raw
 
 
-def _as_task_result(raw: TaskResult | dict | None, task_id: str) -> TaskResult:
+def task_result(raw: TaskResult | dict | None, task_id: str) -> TaskResult:
     if raw is None:
         return TaskResult(task_id=task_id, success=False, error="未执行")
     if isinstance(raw, TaskResult):
@@ -103,37 +87,39 @@ def _as_task_result(raw: TaskResult | dict | None, task_id: str) -> TaskResult:
     return TaskResult(task_id=task_id, success=False, error="未知结果类型")
 
 
-def _auto_approve_enabled() -> bool:
-    return CFG.auto_approve_human
+def auto_approve() -> bool:
+    # 运行时读取，避免 CFG 在 import 时固化导致请求级配置失效
+    raw = os.getenv("AUTO_APPROVE_HUMAN")
+    return raw is not None and raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-def _merge_retrieved(state: AgentState, new_docs: list) -> list:
-    """合并检索结果到 state.retrieved_context，按 source 去重。"""
+def append_retrieved_docs(state: AgentState, new_docs: list) -> list:
     from state import RetrievedDoc
-    existing = list(state.get("retrieved_context") or [])
-    seen = {(d.source, d.content[:80]) for d in existing}
+
+    merged = list(state.get("retrieved_context") or [])
+    seen = {(doc.source, doc.content[:80]) for doc in merged}
     for raw in new_docs:
         doc = raw if isinstance(raw, RetrievedDoc) else RetrievedDoc.model_validate(raw)
         key = (doc.source, doc.content[:80])
         if key not in seen:
-            existing.append(doc)
+            merged.append(doc)
             seen.add(key)
-    return existing
+    return merged
 
 
-def _record_skill(metrics: RunMetrics, skill_id: str) -> None:
+def track_skill(metrics: RunMetrics, skill_id: str) -> None:
     metrics.skill_invocations.append(skill_id)
     metrics.manual_minutes_saved += CFG.skill.manual_minutes.get(skill_id, 10)
 
 
-def _is_stage_approved(state: AgentState, stage: Literal["post_dispatch", "pre_summary"]) -> bool:
+def stage_approved(state: AgentState, stage: Literal["post_dispatch", "pre_summary"]) -> bool:
     for record in state.get("human_approvals") or []:
         if record.stage == stage and record.approved:
             return True
     return False
 
 
-def _process_human_decision(
+def apply_human_decision(
     state: AgentState,
     stage: Literal["post_dispatch", "pre_summary"],
     decision: Any,
@@ -156,7 +142,7 @@ def _process_human_decision(
     status = "已批准" if approved else "已拒绝"
     return {
         "human_approvals": approvals,
-        "execution_flags": _merge_flags(state, awaiting_human=False, pending_human_stage=None),
+        "execution_flags": update_execution_flags(state, awaiting_human=False, pending_human_stage=None),
         "messages": [AIMessage(content=f"[人工确认/{stage_label}] {status} {comment or ''}")],
     }
 
@@ -166,15 +152,15 @@ def document_loader_agent_node(state: AgentState) -> dict:
     if flags.documents_loaded:
         return {"messages": [AIMessage(content="[文档加载] 已加载，跳过")]}
 
-    result = ingest_documents()
-    analytics = ensure_analytics_db()
-    ok = result.get("ok", True) and analytics.get("ok", True)
-    msg = f"{result.get('message', '')}；{analytics.get('message', '')}"
+    rag_status = ingest_documents()
+    db_status = ensure_analytics_db()
+    ok = rag_status.get("ok", True) and db_status.get("ok", True)
+    message = f"{rag_status.get('message', '')}；{db_status.get('message', '')}"
     if not ok:
-        msg += "（部分数据源不可用，将降级执行）"
+        message += "（部分数据源不可用，将降级执行）"
     return {
-        "execution_flags": _merge_flags(state, documents_loaded=True),
-        "messages": [AIMessage(content=f"[文档加载] {msg}")],
+        "execution_flags": update_execution_flags(state, documents_loaded=True),
+        "messages": [AIMessage(content=f"[文档加载] {message}")],
     }
 
 
@@ -183,77 +169,78 @@ def dispatcher_agent_node(state: AgentState) -> dict:
     if flags.planning_done and state.get("task_list"):
         return {"messages": [AIMessage(content="[分发] 已拆分，跳过")]}
 
-    patch = apply_split_to_state(state["user_input"])
-    task_list: list[SubTask] = patch["task_list"]
-    task_list = [
-        t.model_copy(update={"assignee": pick_worker_for_task(t)})  # type: ignore[arg-type]
-        for t in task_list
+    split = apply_split_to_state(state["user_input"])
+    tasks: list[SubTask] = split["task_list"]
+    tasks = [
+        task.model_copy(update={"assignee": pick_worker_for_task(task)})  # type: ignore[arg-type]
+        for task in tasks
     ]
-    new_flags = _merge_flags(
-        state,
-        planning_done=True,
-        current_task_index=0,
-    )
     return {
-        "task_list": task_list,
-        "execution_flags": new_flags,
+        "task_list": tasks,
+        "execution_flags": update_execution_flags(
+            state,
+            planning_done=True,
+            current_task_index=0,
+        ),
         "messages": [
             AIMessage(
-                content=f"[分发] {len(task_list)} 项："
-                + "、".join(t.title for t in task_list)
+                content=f"[分发] {len(tasks)} 项：" + "、".join(task.title for task in tasks)
             )
         ],
     }
 
 
 def human_review_dispatch_node(state: AgentState) -> dict:
-    if _is_stage_approved(state, "post_dispatch"):
+    if stage_approved(state, "post_dispatch"):
         return {"messages": [AIMessage(content="[人工确认] 分发已确认")]}
 
-    if _auto_approve_enabled():
-        return _process_human_decision(
+    if auto_approve():
+        return apply_human_decision(
             state, "post_dispatch", {"approved": True, "comment": "自动批准"}
         )
 
-    task_list = state.get("task_list") or []
+    tasks = state.get("task_list") or []
     decision = interrupt(
         {
             "type": "human_review",
             "stage": "post_dispatch",
             "prompt": "确认子任务拆分后继续执行",
-            "task_list": [t.model_dump() for t in task_list],
+            "task_list": [task.model_dump() for task in tasks],
             "thread_id": state.get("thread_id", ""),
         }
     )
-    update = _process_human_decision(state, "post_dispatch", decision)
-    update["execution_flags"] = _merge_flags(
+    update = apply_human_decision(state, "post_dispatch", decision)
+    update["execution_flags"] = update_execution_flags(
         {**state, **update}, awaiting_human=False, pending_human_stage=None
     )
     return update
 
 
-def _maybe_prefetch_tools(task: SubTask, metrics: RunMetrics) -> list[str]:
-    """规则触发常用工具（无 Function Calling 时的兜底）。"""
+def prefetch_tools_for_task(task: SubTask, metrics: RunMetrics) -> list[str]:
     text = f"{task.title} {task.description}"
-    outputs: list[str] = []
+    lines: list[str] = []
+
     if re.search(r"库存|备货|SKU", text):
-        out = TOOL_MAP["query_channel_inventory"].invoke({"sku": "SKU-001"})
-        outputs.append(f"[库存查询] {out}")
+        result = TOOL_MAP["query_channel_inventory"].invoke({"sku": "SKU-001"})
+        lines.append(f"[库存查询] {result}")
         metrics.tool_calls_count += 1
+
     if re.search(r"搜索|竞品|调研|市场", text):
-        out = TOOL_MAP["simple_web_search"].invoke({"query": text[:80]})
-        outputs.append(f"[市场情报] {out}")
+        result = TOOL_MAP["simple_web_search"].invoke({"query": text[:80]})
+        lines.append(f"[市场情报] {result}")
         metrics.tool_calls_count += 1
+
     if re.search(r"销量|渠道|排行|统计|SQL|数据", text):
-        out = TOOL_MAP["analyze_sales_pandas"].invoke(
+        result = TOOL_MAP["analyze_sales_pandas"].invoke(
             {"analysis_type": "channel_compare", "group_by": "channel"}
         )
-        outputs.append(f"[pandas分析] {out}")
+        lines.append(f"[pandas分析] {result}")
         metrics.tool_calls_count += 1
-    return outputs
+
+    return lines
 
 
-def _try_run_skill(
+def run_matched_skill(
     task: SubTask, state: AgentState, metrics: RunMetrics, *, prefer: bool = False
 ) -> TaskResult | None:
     text = f"{task.title} {task.description}"
@@ -261,28 +248,30 @@ def _try_run_skill(
     skill_out = match_and_execute_skill(text, ctx)
     if skill_out is None:
         return None
-    _record_skill(metrics, skill_out.skill_id)
+
+    track_skill(metrics, skill_out.skill_id)
+    failed = "执行失败" in skill_out.summary
     return TaskResult(
         task_id=task.task_id,
-        success="执行失败" not in skill_out.summary,
+        success=not failed,
         output=skill_out.markdown,
-        error=skill_out.summary if "执行失败" in skill_out.summary else None,
+        error=skill_out.summary if failed else None,
         tool_calls=[f"skill:{skill_out.skill_id}", *skill_out.data_sources],
     )
 
 
-def _run_llm_with_tools(
+def run_llm_with_tools(
     llm: ChatOpenAI,
     messages: list[BaseMessage],
     metrics: RunMetrics,
     node: str,
 ) -> tuple[str, list[str]]:
     tool_names: list[str] = []
-    llm_tools = llm.bind_tools(EXECUTOR_TOOLS)
+    bound = llm.bind_tools(EXECUTOR_TOOLS)
     conversation = list(messages)
 
     for _ in range(3):
-        response = tracked_invoke(llm_tools, conversation, node=node, metrics=metrics)
+        response = tracked_invoke(bound, conversation, node=node, metrics=metrics)
         if not getattr(response, "tool_calls", None):
             return str(response.content), tool_names
 
@@ -291,17 +280,17 @@ def _run_llm_with_tools(
             name = call["name"]
             tool_names.append(name)
             metrics.tool_calls_count += 1
-            fn = TOOL_MAP.get(name)
+            handler = TOOL_MAP.get(name)
             try:
-                result = fn.invoke(call["args"]) if fn else f"未知工具: {name}"
-            except Exception as e:
-                result = str(e)
+                result = handler.invoke(call["args"]) if handler else f"未知工具: {name}"
+            except Exception as exc:
+                result = str(exc)
             conversation.append(ToolMessage(content=str(result), tool_call_id=call["id"]))
 
     return str(response.content), tool_names
 
 
-def _execute_single_task(
+def execute_task(
     task: SubTask,
     state: AgentState,
     llm: Optional[ChatOpenAI],
@@ -312,7 +301,7 @@ def _execute_single_task(
 ) -> TaskResult:
     fail_ids = state.get("simulate_fail_task_ids") or []
     flags = state.get("execution_flags") or ExecutionFlags()
-    metrics = _get_metrics(state)
+    metrics = run_metrics(state)
 
     if task.task_id in fail_ids and flags.retry_count < 1:
         return TaskResult(
@@ -322,15 +311,15 @@ def _execute_single_task(
             tool_calls=["simulate_failure"],
         )
 
-    skill_result = _try_run_skill(task, state, metrics, prefer=prefer_skill)
+    skill_result = run_matched_skill(task, state, metrics, prefer=prefer_skill)
     if skill_result is not None:
         return skill_result
 
     query = f"{task.title} {task.description} {state['user_input'][:200]}"
     docs = retrieve_context(query, k=rag_k)
     metrics.rag_queries += 1
-    rag_text = format_retrieved_context(docs)
-    prefetched = _maybe_prefetch_tools(task, metrics)
+    policy_context = format_retrieved_context(docs)
+    prefetched = prefetch_tools_for_task(task, metrics)
 
     if llm is not None:
         system = SystemMessage(
@@ -345,65 +334,88 @@ def _execute_single_task(
             content=(
                 f"总需求背景：{state['user_input']}\n"
                 f"当前子任务：{task.model_dump_json(ensure_ascii=False)}\n\n"
-                f"【业务文档检索结果】\n{rag_text}\n"
+                f"【业务文档检索结果】\n{policy_context}\n"
                 + ("\n".join(prefetched) if prefetched else "")
             )
         )
         try:
-            output, tool_calls = _run_llm_with_tools(
-                llm, [system, human], metrics, node=node
-            )
+            output, tool_calls = run_llm_with_tools(llm, [system, human], metrics, node=node)
             return TaskResult(
                 task_id=task.task_id,
                 success=True,
                 output=str(output),
                 tool_calls=tool_calls or ["llm"],
             )
-        except Exception as e:
-            return TaskResult(task_id=task.task_id, success=False, error=str(e))
+        except Exception as exc:
+            return TaskResult(task_id=task.task_id, success=False, error=str(exc))
 
-    local_out = f"已完成：{task.title}"
+    local_output = f"已完成：{task.title}"
     if docs:
-        local_out += f"\n（参考文档：{docs[0].source}）"
+        local_output += f"\n（参考文档：{docs[0].source}）"
     return TaskResult(
         task_id=task.task_id,
         success=True,
-        output=local_out,
+        output=local_output,
         tool_calls=["local_executor"],
     )
 
 
-def _run_task_node(state: AgentState, *, node: str, rag_k: int, prefer_skill: bool = False) -> dict:
+def run_worker_node(
+    state: AgentState, *, node: str, rag_k: int, prefer_skill: bool = False
+) -> dict:
     flags = state.get("execution_flags") or ExecutionFlags()
-    metrics = _get_metrics(state)
-    task_list: list[SubTask] = list(state.get("task_list") or [])
-    task_results: dict[str, TaskResult] = dict(state.get("task_results") or {})
+    metrics = run_metrics(state)
+    tasks: list[SubTask] = list(state.get("task_list") or [])
+    results: dict[str, TaskResult] = dict(state.get("task_results") or {})
     idx = flags.current_task_index
 
-    if idx >= len(task_list):
+    if idx >= len(tasks):
         return {
-            "execution_flags": _merge_flags(state, execution_done=True),
+            "execution_flags": update_execution_flags(state, execution_done=True),
             "run_metrics": metrics,
             "messages": [AIMessage(content=f"[{node}] 全部完成")],
         }
 
-    if flags.retry_count == 0 and idx == 0 and metrics.first_pass_rate == 0:
-        pass  # 首轮开始前不快照
+    current = tasks[idx]
+    prior = task_result(results.get(current.task_id), current.task_id)
+    if flags.retry_count > 0 and prior.success:
+        # 重试时只重跑失败项，避免覆盖后续已经成功的结果
+        working = list(tasks)
+        working[idx] = current.model_copy(update={"status": "success"})
+        next_idx = idx + 1
+        all_done = next_idx >= len(tasks)
+        return {
+            "task_list": working,
+            "execution_flags": update_execution_flags(
+                state,
+                current_task_index=next_idx,
+                execution_done=all_done,
+                need_retry=False,
+            ),
+            "run_metrics": metrics,
+            "messages": [
+                AIMessage(
+                    content=(
+                        f"[{node}] retry={flags.retry_count}/{flags.max_retry} "
+                        f"{current.task_id} 跳过（已成功）"
+                    )
+                )
+            ],
+        }
 
-    current = task_list[idx]
-    updated_list = list(task_list)
-    updated_list[idx] = current.model_copy(update={"status": "running"})
+    working = list(tasks)
+    working[idx] = current.model_copy(update={"status": "running"})
 
-    result = _execute_single_task(
+    outcome = execute_task(
         current, state, get_llm(), rag_k=rag_k, node=node, prefer_skill=prefer_skill
     )
-    task_results[current.task_id] = result
-    final_status = "success" if result.success else "failed"
-    updated_list[idx] = current.model_copy(update={"status": final_status})
+    results[current.task_id] = outcome
+    final_status = "success" if outcome.success else "failed"
+    working[idx] = current.model_copy(update={"status": final_status})
 
     next_idx = idx + 1
-    all_done = next_idx >= len(task_list)
-    new_flags = _merge_flags(
+    all_done = next_idx >= len(tasks)
+    new_flags = update_execution_flags(
         state,
         current_task_index=next_idx,
         execution_done=all_done,
@@ -411,18 +423,21 @@ def _run_task_node(state: AgentState, *, node: str, rag_k: int, prefer_skill: bo
     )
 
     if all_done and flags.retry_count == 0:
-        snap_state = {**state, "task_list": updated_list, "task_results": task_results}
-        metrics.first_pass_rate = snapshot_pass_rate(snap_state)  # type: ignore[arg-type]
+        snap = {**state, "task_list": working, "task_results": results}
+        metrics.first_pass_rate = snapshot_pass_rate(snap)  # type: ignore[arg-type]
 
-    status = "成功" if result.success else "失败"
+    status = "成功" if outcome.success else "失败"
     retry = f" retry={flags.retry_count}/{flags.max_retry}" if flags.retry_count else ""
-    detail = (result.output or result.error or "")[:120]
+    detail = (outcome.output or outcome.error or "")[:120]
     retrieved = retrieve_context(f"{current.title} {current.description}", k=2)
-    merged_ctx = _merge_retrieved({**state, "retrieved_context": state.get("retrieved_context") or []}, retrieved)
+    merged_ctx = append_retrieved_docs(
+        {**state, "retrieved_context": state.get("retrieved_context") or []},
+        retrieved,
+    )
 
     return {
-        "task_list": updated_list,
-        "task_results": task_results,
+        "task_list": working,
+        "task_results": results,
         "execution_flags": new_flags,
         "retrieved_context": merged_ctx,
         "run_metrics": metrics,
@@ -431,38 +446,41 @@ def _run_task_node(state: AgentState, *, node: str, rag_k: int, prefer_skill: bo
 
 
 def executor_agent_node(state: AgentState) -> dict:
-    return _run_task_node(state, node="executor", rag_k=CFG.rag.default_k)
+    return run_worker_node(state, node="executor", rag_k=CFG.rag.default_k)
 
 
 def researcher_agent_node(state: AgentState) -> dict:
-    return _run_task_node(state, node="researcher", rag_k=CFG.rag.researcher_k)
+    return run_worker_node(state, node="researcher", rag_k=CFG.rag.researcher_k)
 
 
 def data_analyst_agent_node(state: AgentState) -> dict:
-    return _run_task_node(state, node="data_analyst", rag_k=CFG.rag.analyst_k, prefer_skill=True)
+    return run_worker_node(
+        state, node="data_analyst", rag_k=CFG.rag.analyst_k, prefer_skill=True
+    )
 
 
-def _build_reflection_rule_based(state: AgentState, round_index: int) -> ReflectionRecord:
-    task_list = state.get("task_list") or []
-    task_results = state.get("task_results") or {}
+def reflection_from_rules(state: AgentState, round_index: int) -> ReflectionRecord:
+    tasks = state.get("task_list") or []
+    results = state.get("task_results") or {}
     flags = state.get("execution_flags") or ExecutionFlags()
 
     failed = [
-        t for t in task_list
-        if not _as_task_result(task_results.get(t.task_id), t.task_id).success
+        task
+        for task in tasks
+        if not task_result(results.get(task.task_id), task.task_id).success
     ]
-    success_count = len(task_list) - len(failed)
+    success_count = len(tasks) - len(failed)
     expected = count_expected_tasks(state["user_input"])
-    actual = len(task_list)
+    actual = len(tasks)
     coverage_ok = actual >= expected if expected else True
 
-    score = int(success_count / max(len(task_list), 1) * 100)
+    score = int(success_count / max(len(tasks), 1) * 100)
     if coverage_ok and not failed:
         score = max(score, 95)
     elif not coverage_ok:
         score = min(score, 85)
 
-    issues: list[str] = [f"{t.task_id} 失败" for t in failed]
+    issues: list[str] = [f"{task.task_id} 失败" for task in failed]
     if not coverage_ok:
         issues.append(f"子任务拆分不足：期望约 {expected} 项，实际 {actual} 项")
 
@@ -473,7 +491,7 @@ def _build_reflection_rule_based(state: AgentState, round_index: int) -> Reflect
         issues=issues,
         suggestions=["重试失败任务"] if failed else [],
         summary=(
-            f"{success_count}/{len(task_list)} 成功，期望 {expected} 项，"
+            f"{success_count}/{len(tasks)} 成功，期望 {expected} 项，"
             f"重试 {flags.retry_count}/{flags.max_retry}"
         ),
     )
@@ -481,14 +499,14 @@ def _build_reflection_rule_based(state: AgentState, round_index: int) -> Reflect
 
 def reflection_agent_node(state: AgentState) -> dict:
     flags = state.get("execution_flags") or ExecutionFlags()
-    metrics = _get_metrics(state)
+    metrics = run_metrics(state)
     logs = list(state.get("reflection_logs") or [])
     round_index = len(logs) + 1
 
     llm = get_llm()
     if llm:
-        task_list = state.get("task_list") or []
-        task_results = state.get("task_results") or {}
+        tasks = state.get("task_list") or []
+        results = state.get("task_results") or {}
         expected = count_expected_tasks(state["user_input"])
         system = SystemMessage(
             content=(
@@ -498,15 +516,32 @@ def reflection_agent_node(state: AgentState) -> dict:
         )
         human = HumanMessage(
             content=(
-                f"需求：{state['user_input']}\n期望：{expected}，实际：{len(task_list)}\n"
-                f"任务：{json.dumps([t.model_dump() for t in task_list], ensure_ascii=False)}\n"
-                f"结果：{json.dumps({k: v.model_dump() for k, v in task_results.items()}, ensure_ascii=False)}"
+                f"需求：{state['user_input']}\n期望：{expected}，实际：{len(tasks)}\n"
+                f"任务：{json.dumps([task.model_dump() for task in tasks], ensure_ascii=False)}\n"
+                f"结果：{json.dumps({k: v.model_dump() for k, v in results.items()}, ensure_ascii=False)}"
             )
         )
-        record = _invoke_structured_json(llm, ReflectionRecord, [system, human], metrics)
-        record = record.model_copy(update={"round_index": round_index})
+        llm_record = call_llm_for_model(llm, ReflectionRecord, [system, human], metrics)
+        rule_record = reflection_from_rules(state, round_index)
+        if not rule_record.passed:
+            # 规则发现失败项时，不允许 LLM 把结果判为通过
+            llm_record = llm_record.model_copy(
+                update={
+                    "passed": False,
+                    "score": min(llm_record.score, rule_record.score),
+                    "issues": list(
+                        dict.fromkeys([*llm_record.issues, *rule_record.issues])
+                    ),
+                    "suggestions": list(
+                        dict.fromkeys(
+                            [*llm_record.suggestions, *rule_record.suggestions]
+                        )
+                    ),
+                }
+            )
+        record = llm_record.model_copy(update={"round_index": round_index})
     else:
-        record = _build_reflection_rule_based(state, round_index)
+        record = reflection_from_rules(state, round_index)
 
     logs.append(record)
     can_retry = flags.retry_count < flags.max_retry
@@ -514,36 +549,36 @@ def reflection_agent_node(state: AgentState) -> dict:
     update: dict = {"reflection_logs": logs, "run_metrics": metrics}
 
     if should_retry:
-        task_list = list(state.get("task_list") or [])
-        task_results = dict(state.get("task_results") or {})
-        first_failed_idx = len(task_list)
-        for i, task in enumerate(task_list):
-            res = _as_task_result(task_results.get(task.task_id), task.task_id)
-            if not res.success:
+        tasks = list(state.get("task_list") or [])
+        results = dict(state.get("task_results") or {})
+        first_failed_idx = len(tasks)
+        for i, task in enumerate(tasks):
+            outcome = task_result(results.get(task.task_id), task.task_id)
+            if not outcome.success:
                 first_failed_idx = min(first_failed_idx, i)
-                task_list[i] = task.model_copy(update={"status": "pending"})
-                task_results.pop(task.task_id, None)
-        new_flags = _merge_flags(
+                tasks[i] = task.model_copy(update={"status": "pending"})
+                results.pop(task.task_id, None)
+        new_flags = update_execution_flags(
             state,
             need_retry=True,
             retry_count=flags.retry_count + 1,
             execution_done=False,
-            current_task_index=first_failed_idx if first_failed_idx < len(task_list) else 0,
+            current_task_index=first_failed_idx if first_failed_idx < len(tasks) else 0,
             reflection_done=False,
         )
         msg = (
             f"[反思] 第{round_index}轮未通过 score={record.score}，"
             f"退回执行 retry={new_flags.retry_count}/{new_flags.max_retry}"
         )
-        update["task_list"] = task_list
-        update["task_results"] = task_results
+        update["task_list"] = tasks
+        update["task_results"] = results
     else:
         msg = (
             f"[反思] 第{round_index}轮未通过，已达重试上限 {flags.max_retry}"
             if not record.passed and not can_retry
             else f"[反思] 第{round_index}轮通过 score={record.score}"
         )
-        new_flags = _merge_flags(state, need_retry=False, reflection_done=True)
+        new_flags = update_execution_flags(state, need_retry=False, reflection_done=True)
 
     update["execution_flags"] = new_flags
     update["messages"] = [AIMessage(content=msg)]
@@ -551,11 +586,11 @@ def reflection_agent_node(state: AgentState) -> dict:
 
 
 def human_review_summary_node(state: AgentState) -> dict:
-    if _is_stage_approved(state, "pre_summary"):
+    if stage_approved(state, "pre_summary"):
         return {"messages": [AIMessage(content="[人工确认] 总结已确认")]}
 
-    if _auto_approve_enabled():
-        return _process_human_decision(
+    if auto_approve():
+        return apply_human_decision(
             state, "pre_summary", {"approved": True, "comment": "自动批准"}
         )
 
@@ -572,32 +607,35 @@ def human_review_summary_node(state: AgentState) -> dict:
             "thread_id": state.get("thread_id", ""),
         }
     )
-    update = _process_human_decision(state, "pre_summary", decision)
-    update["execution_flags"] = _merge_flags(
+    update = apply_human_decision(state, "pre_summary", decision)
+    update["execution_flags"] = update_execution_flags(
         {**state, **update}, awaiting_human=False, pending_human_stage=None
     )
     return update
 
 
 def summary_agent_node(state: AgentState) -> dict:
-    task_list = state.get("task_list") or []
-    task_results = state.get("task_results") or {}
+    tasks = state.get("task_list") or []
+    results = state.get("task_results") or {}
     logs = state.get("reflection_logs") or []
-    metrics = compute_run_metrics(state, _get_metrics(state))
+    metrics = compute_run_metrics(state, run_metrics(state))
 
     reflection_summary = logs[-1].summary if logs else None
     current_flags = state.get("execution_flags") or ExecutionFlags()
     patch = apply_aggregate_to_state(
-        task_list,
-        task_results,
+        tasks,
+        results,
         reflection_summary,
-        current_flags=current_flags if isinstance(current_flags, ExecutionFlags)
+        current_flags=current_flags
+        if isinstance(current_flags, ExecutionFlags)
         else ExecutionFlags.model_validate(current_flags),
     )
-    new_flags = _merge_flags(state, **patch["execution_flags"].model_dump())
+    new_flags = update_execution_flags(state, **patch["execution_flags"].model_dump())
 
     human_notes = "; ".join(
-        f"{a.stage}:{a.comment}" for a in (state.get("human_approvals") or []) if a.comment
+        f"{approval.stage}:{approval.comment}"
+        for approval in (state.get("human_approvals") or [])
+        if approval.comment
     )
     final_output = patch["final_output"]
     final_output += "\n\n" + format_metrics_report(metrics)
@@ -613,4 +651,3 @@ def summary_agent_node(state: AgentState) -> dict:
             AIMessage(content=final_output),
         ],
     }
-

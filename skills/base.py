@@ -1,4 +1,3 @@
-"""Skill 基类，入参与 AgentState 对齐。"""
 from __future__ import annotations
 
 import re
@@ -38,6 +37,8 @@ class BaseSkill(ABC):
     description: str
     triggers: list[str]
     output_sections: list[str]
+    # 多个 Skill 命中次数相同时，priority 高的优先
+    priority: int = 0
 
     def matches(self, text: str) -> bool:
         return any(re.search(p, text, re.I) for p in self.triggers)

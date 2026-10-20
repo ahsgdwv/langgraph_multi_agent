@@ -1,4 +1,3 @@
-"""Gradio 网页：快消业务分析入口。"""
 from __future__ import annotations
 
 import os
@@ -14,6 +13,17 @@ from branding import get_display_title, get_example_analysis_prefix, get_subtitl
 from llm_utils import get_llm_status
 from main import run
 from paths import REPORTS_DIR, save_user_report
+from prompt_optimizer import (
+    compare_test,
+    default_template_choice,
+    default_test_probe,
+    example_for_mode,
+    format_length_stats,
+    parse_template_choice,
+    run_optimize,
+    save_optimized_prompt,
+    templates_for_mode,
+)
 from skills import list_skills
 from tools import count_expected_tasks
 
@@ -21,7 +31,14 @@ HINT_OK = "[就绪]"
 HINT_WARN = "[注意]"
 HINT_INFO = "[提示]"
 
-def _build_example_fmcg() -> str:
+MODE_LABELS = {
+    "系统提示词": "system",
+    "用户提示词": "user",
+    "迭代改进": "iterate",
+}
+
+
+def _example_fmcg() -> str:
     return (
         get_example_analysis_prefix()
         + "1. 统计便利店、商超、电商、特通渠道销量与销售额对比；"
@@ -33,10 +50,8 @@ def _build_example_fmcg() -> str:
     )
 
 
-EXAMPLE_FMCG = _build_example_fmcg()
-
+EXAMPLE_FMCG = _example_fmcg()
 EXAMPLE_SIMPLE = "统计渠道销量、输出 SKU 排行、检索陈列政策"
-
 EXAMPLE_CHANNEL = "对比便利店、商超、电商、特通四个渠道的销售表现与份额"
 
 EXAMPLE_TEMPLATE = """【区域/品类背景，如：华东气泡水 Q2 复盘】，需要完成：
@@ -95,6 +110,18 @@ FAQ_MD = """
 
 **失败怎么办？**  
 检查 `.env` 中的 API Key，或将质量重试次数调为 0。
+"""
+
+OPTIMIZER_GUIDE_MD = """
+### 提示词优化用法
+
+旁路工具：改提示词、对比效果；**不会**自动改仓库里的 Agent system。
+
+1. **系统提示词**：默认「Agent短约束」；控长度用「系统精简」；要长模板用「通用结构化」
+2. **用户提示词**：默认「周报任务」→ 编号列表，方便拆分/Skill；可一键「优化并生成周报」
+3. **迭代改进**：按改进需求微调；想变短选「迭代压缩」
+
+试跑对比会显示两侧字数差。优化结果可保存到 `data/outputs/`。
 """
 
 REPORTS_FOLDER_HINT = f"报告目录：`{REPORTS_DIR.resolve()}`"
@@ -182,80 +209,278 @@ def generate_report(user_input: str, max_retry: int) -> tuple[str, str, str, str
         return final_output, status, save_hint, str(saved_path)
 
     except Exception as e:
-        err = (
-            f"生成失败：{e}\n"
-            "请检查网络与 API Key，或将质量重试次数设为 0。"
-        )
+        err = f"生成失败：{e}\n请检查网络与 API Key，或将质量重试次数设为 0。"
         return f"运行失败\n\n{e}", err, "", None
+
+
+def _mode_key(label: str) -> str:
+    return MODE_LABELS.get(label, "system")
+
+
+def on_mode_change(label: str):
+    mode = _mode_key(label)
+    choices = templates_for_mode(mode)  # type: ignore[arg-type]
+    default = default_template_choice(mode)  # type: ignore[arg-type]
+    show_req = mode == "iterate"
+    probe = default_test_probe(mode)  # type: ignore[arg-type]
+    return (
+        gr.update(choices=choices, value=default),
+        gr.update(visible=show_req),
+        probe,
+    )
+
+
+def fill_agent_example(label: str):
+    mode = _mode_key(label)
+    prompt, req = example_for_mode(mode)  # type: ignore[arg-type]
+    probe = default_test_probe(mode)  # type: ignore[arg-type]
+    return prompt, req, probe, f"已填入 {label} 示例"
+
+
+def do_optimize(label: str, template_choice: str, prompt: str, requirements: str):
+    mode = _mode_key(label)
+    tid = parse_template_choice(template_choice) or None
+    try:
+        out = run_optimize(prompt, mode, tid, requirements)  # type: ignore[arg-type]
+        stats = format_length_stats(prompt, out)
+        tip = ""
+        if mode == "user":
+            tip = "；可「应用到周报」或「优化并生成周报」"
+        elif mode == "system":
+            tip = "；系统结果需手动贴回 agents.py，不会自动改代码"
+        return out, f"优化完成（{label} / {tid or 'default'}）· {stats}{tip}"
+    except Exception as e:
+        return "", f"优化失败：{e}"
+
+
+def do_compare(label: str, original: str, optimized: str, test_input: str):
+    mode = _mode_key(label)
+    if not (original or "").strip():
+        return "请先填写原始提示词", "", "—"
+    if not (optimized or "").strip():
+        return "请先完成优化", "", "—"
+    if not (test_input or "").strip():
+        return "请填写测试输入", "", "—"
+    try:
+        left, right = compare_test(original, optimized, test_input, mode)  # type: ignore[arg-type]
+        stats = format_length_stats(original, optimized)
+        note = (
+            f"试跑完成 · 提示词{stats} · "
+            f"输出字数 原文 {len(left)} / 优化后 {len(right)}"
+        )
+        return left, right, note
+    except Exception as e:
+        err = f"试跑失败：{e}"
+        return err, err, err
+
+
+def apply_to_report(optimized: str, label: str):
+    mode = _mode_key(label)
+    text = (optimized or "").strip()
+    if not text:
+        return gr.update(), gr.update(), "请先得到优化结果"
+    if mode != "user":
+        return gr.update(), gr.update(), "仅「用户提示词」模式可应用到周报任务框"
+    hint = analyze_user_input(text)
+    return text, hint, f"已写入周报任务框 · {hint} · 可切到「周报生成」"
+
+
+def save_opt_result(optimized: str, label: str):
+    text = (optimized or "").strip()
+    if not text:
+        return "没有可保存的优化结果"
+    try:
+        rel = save_optimized_prompt(text, mode=_mode_key(label))
+        return f"已保存 `{rel}`"
+    except Exception as e:
+        return f"保存失败：{e}"
+
+
+def optimize_then_report(label: str, template_choice: str, prompt: str, requirements: str, max_retry: int):
+    mode = _mode_key(label)
+    if mode != "user":
+        msg = "「优化并生成周报」仅支持用户提示词模式"
+        return "", msg, gr.update(), gr.update(), "*未生成*", "等待切换模式", "", None
+    tid = parse_template_choice(template_choice) or None
+    try:
+        optimized = run_optimize(prompt, "user", tid, requirements)
+    except Exception as e:
+        return "", f"优化失败：{e}", gr.update(), gr.update(), "*未生成*", "优化失败", "", None
+
+    stats = format_length_stats(prompt, optimized)
+    hint = analyze_user_input(optimized)
+    report_md, status, save_hint, download = generate_report(optimized, max_retry)
+    status_line = f"已优化（{stats}）并进入周报流程\n\n{status}"
+    return optimized, status_line, optimized, hint, report_md, status, save_hint, download
 
 
 def build_ui() -> gr.Blocks:
     title = get_display_title()
     theme = gr.themes.Soft(primary_hue="slate")
+
     with gr.Blocks(title=title) as demo:
-        gr.Markdown(
-            f"# {title}\n"
-            f"{get_subtitle()}\n\n"
-            f"LLM：{get_llm_status()}"
-        )
+        gr.Markdown(f"# {title}\n{get_subtitle()}\n\nLLM：{get_llm_status()}")
 
-        with gr.Accordion("Skill 列表", open=False):
-            gr.Markdown(SKILLS_MD)
+        with gr.Tabs():
+            with gr.Tab("周报生成"):
+                with gr.Accordion("Skill 列表", open=False):
+                    gr.Markdown(SKILLS_MD)
 
-        with gr.Accordion("需求写法", open=False):
-            gr.Markdown(WRITING_TIPS_MD)
+                with gr.Accordion("需求写法", open=False):
+                    gr.Markdown(WRITING_TIPS_MD)
 
-        with gr.Accordion("使用说明", open=False):
-            gr.Markdown(GUIDE_MD)
-
-        with gr.Row():
-            with gr.Column(scale=1):
-                user_input = gr.Textbox(
-                    label="分析任务",
-                    placeholder=EXAMPLE_FMCG[:120] + "…",
-                    lines=8,
-                )
-                input_hint = gr.Markdown(
-                    value=analyze_user_input(""),
-                    elem_classes=["input-hint"],
-                )
+                with gr.Accordion("使用说明", open=False):
+                    gr.Markdown(GUIDE_MD)
 
                 with gr.Row():
-                    btn_template = gr.Button("填空模板", size="sm")
-                    btn_ex_simple = gr.Button("简单示例", size="sm")
-                    btn_ex_fmcg = gr.Button("完整示例", size="sm")
-                    btn_ex_channel = gr.Button("渠道对比", size="sm")
+                    with gr.Column(scale=1):
+                        user_input = gr.Textbox(
+                            label="分析任务",
+                            placeholder=EXAMPLE_FMCG[:120] + "…",
+                            lines=8,
+                        )
+                        input_hint = gr.Markdown(
+                            value=analyze_user_input(""),
+                            elem_classes=["input-hint"],
+                        )
 
-                max_retry = gr.Slider(0, 5, value=2, step=1, label="质量重试次数")
-                btn_generate = gr.Button("生成周报", variant="primary")
+                        with gr.Row():
+                            btn_template = gr.Button("填空模板", size="sm")
+                            btn_ex_simple = gr.Button("简单示例", size="sm")
+                            btn_ex_fmcg = gr.Button("完整示例", size="sm")
+                            btn_ex_channel = gr.Button("渠道对比", size="sm")
 
-            with gr.Column(scale=1):
-                run_status = gr.Markdown("选择示例或填写任务，看到 `[就绪]` 后点击生成。")
-                save_hint = gr.Markdown("")
-                download = gr.File(label="下载周报", interactive=False)
-                gr.Markdown(REPORTS_FOLDER_HINT)
+                        max_retry = gr.Slider(0, 5, value=2, step=1, label="质量重试次数")
+                        btn_generate = gr.Button("生成周报", variant="primary")
 
-        gr.Markdown("### 周报正文")
-        report = gr.Markdown(value="*生成后显示在这里*")
+                    with gr.Column(scale=1):
+                        run_status = gr.Markdown(
+                            "选择示例或填写任务，看到 `[就绪]` 后点击生成。"
+                        )
+                        save_hint = gr.Markdown("")
+                        download = gr.File(label="下载周报", interactive=False)
+                        gr.Markdown(REPORTS_FOLDER_HINT)
 
-        with gr.Accordion("常见问题", open=False):
-            gr.Markdown(FAQ_MD)
+                gr.Markdown("### 周报正文")
+                report = gr.Markdown(value="*生成后显示在这里*")
 
-        user_input.change(analyze_user_input, inputs=user_input, outputs=input_hint)
+                with gr.Accordion("常见问题", open=False):
+                    gr.Markdown(FAQ_MD)
 
-        btn_template.click(lambda: EXAMPLE_TEMPLATE, outputs=user_input)
-        btn_ex_simple.click(lambda: EXAMPLE_SIMPLE, outputs=user_input)
-        btn_ex_fmcg.click(lambda: EXAMPLE_FMCG, outputs=user_input)
-        btn_ex_channel.click(lambda: EXAMPLE_CHANNEL, outputs=user_input)
+                user_input.change(analyze_user_input, inputs=user_input, outputs=input_hint)
 
-        for btn in (btn_template, btn_ex_simple, btn_ex_fmcg, btn_ex_channel):
-            btn.click(analyze_user_input, inputs=user_input, outputs=input_hint)
+                btn_template.click(lambda: EXAMPLE_TEMPLATE, outputs=user_input)
+                btn_ex_simple.click(lambda: EXAMPLE_SIMPLE, outputs=user_input)
+                btn_ex_fmcg.click(lambda: EXAMPLE_FMCG, outputs=user_input)
+                btn_ex_channel.click(lambda: EXAMPLE_CHANNEL, outputs=user_input)
 
-        btn_generate.click(
-            generate_report,
-            inputs=[user_input, max_retry],
-            outputs=[report, run_status, save_hint, download],
-        )
+                for btn in (btn_template, btn_ex_simple, btn_ex_fmcg, btn_ex_channel):
+                    btn.click(analyze_user_input, inputs=user_input, outputs=input_hint)
+
+                btn_generate.click(
+                    generate_report,
+                    inputs=[user_input, max_retry],
+                    outputs=[report, run_status, save_hint, download],
+                )
+
+            with gr.Tab("提示词优化"):
+                gr.Markdown(OPTIMIZER_GUIDE_MD)
+
+                with gr.Row():
+                    opt_mode = gr.Radio(
+                        choices=list(MODE_LABELS.keys()),
+                        value="用户提示词",
+                        label="优化模式",
+                    )
+                    opt_template = gr.Dropdown(
+                        choices=templates_for_mode("user"),
+                        value=default_template_choice("user"),
+                        label="优化模板",
+                    )
+
+                with gr.Row():
+                    with gr.Column(scale=1):
+                        opt_prompt = gr.Textbox(
+                            label="原始提示词",
+                            lines=12,
+                            placeholder="粘贴要优化的系统/用户提示词…",
+                        )
+                        opt_requirements = gr.Textbox(
+                            label="改进需求（迭代模式）",
+                            lines=3,
+                            placeholder="例如：输出改为 JSON；语气更专业；不要多轮追问",
+                            visible=False,
+                        )
+                        with gr.Row():
+                            btn_opt_example = gr.Button("填入 Agent 示例", size="sm")
+                            btn_optimize = gr.Button("一键优化", variant="primary")
+                        with gr.Row():
+                            btn_apply = gr.Button("应用到周报任务框", size="sm")
+                            btn_opt_then_run = gr.Button("优化并生成周报", size="sm")
+                            btn_save_opt = gr.Button("保存结果", size="sm")
+                        opt_status = gr.Markdown(
+                            "默认用户模式。模糊需求可先优化再跑周报；系统模式结果需手动贴回代码。"
+                        )
+
+                    with gr.Column(scale=1):
+                        opt_result = gr.Textbox(label="优化结果", lines=14)
+
+                gr.Markdown("### 试跑对比")
+                test_input = gr.Textbox(
+                    label="测试输入",
+                    lines=3,
+                    value=default_test_probe("user"),
+                )
+                compare_note = gr.Markdown("")
+                btn_compare = gr.Button("试跑对比", variant="secondary")
+                with gr.Row():
+                    test_original = gr.Textbox(label="原文效果", lines=10)
+                    test_optimized = gr.Textbox(label="优化后效果", lines=10)
+
+                opt_mode.change(
+                    on_mode_change,
+                    inputs=opt_mode,
+                    outputs=[opt_template, opt_requirements, test_input],
+                )
+                btn_opt_example.click(
+                    fill_agent_example,
+                    inputs=opt_mode,
+                    outputs=[opt_prompt, opt_requirements, test_input, opt_status],
+                )
+                btn_optimize.click(
+                    do_optimize,
+                    inputs=[opt_mode, opt_template, opt_prompt, opt_requirements],
+                    outputs=[opt_result, opt_status],
+                )
+                btn_compare.click(
+                    do_compare,
+                    inputs=[opt_mode, opt_prompt, opt_result, test_input],
+                    outputs=[test_original, test_optimized, compare_note],
+                )
+                btn_apply.click(
+                    apply_to_report,
+                    inputs=[opt_result, opt_mode],
+                    outputs=[user_input, input_hint, opt_status],
+                )
+                btn_save_opt.click(
+                    save_opt_result,
+                    inputs=[opt_result, opt_mode],
+                    outputs=[opt_status],
+                )
+                btn_opt_then_run.click(
+                    optimize_then_report,
+                    inputs=[opt_mode, opt_template, opt_prompt, opt_requirements, max_retry],
+                    outputs=[
+                        opt_result,
+                        opt_status,
+                        user_input,
+                        input_hint,
+                        report,
+                        run_status,
+                        save_hint,
+                        download,
+                    ],
+                )
 
     demo.theme = theme
     return demo

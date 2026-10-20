@@ -1,4 +1,3 @@
-"""全局状态：Pydantic 模型 + LangGraph AgentState。"""
 from __future__ import annotations
 
 import uuid
@@ -14,17 +13,15 @@ if TYPE_CHECKING:
 
 
 class SubTask(BaseModel):
-    task_id: str = Field(..., description="子任务 ID")
-    title: str = Field(..., description="标题")
-    description: str = Field(default="", description="描述")
-    priority: Literal["low", "medium", "high"] = Field(default="medium")
-    assignee: Literal["executor", "researcher", "data_analyst"] = Field(default="executor")
-    status: Literal["pending", "running", "success", "failed"] = Field(default="pending")
+    task_id: str
+    title: str
+    description: str = ""
+    priority: Literal["low", "medium", "high"] = "medium"
+    assignee: Literal["executor", "researcher", "data_analyst"] = "executor"
+    status: Literal["pending", "running", "success", "failed"] = "pending"
 
 
 class TaskResult(BaseModel):
-    """子任务执行结果"""
-
     task_id: str
     success: bool
     output: str = ""
@@ -33,8 +30,6 @@ class TaskResult(BaseModel):
 
 
 class ReflectionRecord(BaseModel):
-    """反思校验记录"""
-
     round_index: int = Field(..., ge=1)
     passed: bool
     score: int = Field(..., ge=0, le=100)
@@ -44,8 +39,6 @@ class ReflectionRecord(BaseModel):
 
 
 class HumanApprovalRecord(BaseModel):
-    """人工审批记录"""
-
     stage: Literal["post_dispatch", "pre_summary"]
     approved: bool
     comment: str = ""
@@ -53,8 +46,6 @@ class HumanApprovalRecord(BaseModel):
 
 
 class ExecutionFlags(BaseModel):
-    """流程执行标记"""
-
     planning_done: bool = False
     execution_done: bool = False
     reflection_done: bool = False
@@ -69,16 +60,12 @@ class ExecutionFlags(BaseModel):
 
 
 class RetrievedDoc(BaseModel):
-    """RAG 检索片段"""
-
     source: str
     content: str
     score: float = 0.0
 
 
 class LLMCallLog(BaseModel):
-    """单次 LLM 调用日志"""
-
     node: str
     model: str
     latency_ms: float = 0.0
@@ -98,6 +85,7 @@ class RunMetrics(BaseModel):
     manual_minutes_saved: int = 0
 
 
+# checkpoint 序列化要注册这些 pydantic 类型
 MSGPACK_SERIALIZABLE_MODELS: tuple[type[BaseModel], ...] = (
     SubTask,
     TaskResult,
@@ -111,15 +99,12 @@ MSGPACK_SERIALIZABLE_MODELS: tuple[type[BaseModel], ...] = (
 
 
 def create_checkpoint_serializer() -> "JsonPlusSerializer":
-    """创建 Checkpoint 序列化器，注册自定义 Pydantic 类型。"""
     from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
     return JsonPlusSerializer(allowed_msgpack_modules=MSGPACK_SERIALIZABLE_MODELS)
 
 
 class AgentState(TypedDict):
-    """LangGraph 全局状态"""
-
     user_input: str
     task_list: list[SubTask]
     task_results: dict[str, TaskResult]
@@ -144,7 +129,6 @@ def create_initial_state(
     simulate_fail_task_ids: Optional[list[str]] = None,
     use_supervisor: bool = True,
 ) -> AgentState:
-    """构造初始 State"""
     return AgentState(
         user_input=user_input,
         task_list=[],

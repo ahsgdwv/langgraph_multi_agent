@@ -1,4 +1,3 @@
-"""快消数据分析 Agent：命令行入口与集成测试。"""
 from __future__ import annotations
 
 import os
@@ -29,7 +28,7 @@ CHECKPOINT_DB = CHECKPOINT_DIR / "checkpoints.db"
 
 @contextmanager
 def without_llm() -> Iterator[None]:
-    """内置测试走规则逻辑，避免 LLM 输出不稳定导致断言失败"""
+    # tests hit rule-based paths; LLM output would flake assertions
     saved = {k: os.environ.pop(k, None) for k in ("DEEPSEEK_API_KEY", "OPENAI_API_KEY")}
     os.environ["USE_SUPERVISOR"] = "false"
     try:
@@ -89,6 +88,8 @@ def run_until_pause_or_finish(
     for step in app.stream(inputs, config, stream_mode="updates"):
         if verbose:
             for node_name, node_output in step.items():
+                if not isinstance(node_output, dict):
+                    continue
                 for msg in node_output.get("messages", []):
                     content = getattr(msg, "content", str(msg))
                     print(f"  [{node_name}] {content}")
@@ -132,7 +133,7 @@ def resume_run(
 
 
 def run(user_input: str, *, verbose: bool = True, max_retry: int = 2) -> AgentState:
-    os.environ.setdefault("AUTO_APPROVE_HUMAN", "true")
+    os.environ["AUTO_APPROVE_HUMAN"] = "true"
     with get_checkpointer() as cp:
         state, finished, _ = run_until_pause_or_finish(
             user_input, checkpointer=cp, max_retry=max_retry, verbose=verbose
@@ -218,6 +219,8 @@ def test_rag_ingest_and_retrieve() -> None:
     docs = retrieve_context("渠道陈列费用政策", k=2)
     assert len(docs) >= 1
     assert len(docs[0].content) > 10
+    assert len({(d.source, d.content[:80]) for d in docs}) == len(docs)
+    assert any("fmcg_channel_policy.md" in d.source for d in docs)
     print("PASS test_rag_ingest_and_retrieve")
 
 
@@ -235,7 +238,7 @@ def test_external_tools() -> None:
 
 def test_data_analytics() -> None:
     from data_store import ensure_analytics_db, run_readonly_sql
-    from data_tools import analyze_sales_pandas, query_sales_sql
+    from external_tools import analyze_sales_pandas, query_sales_sql
 
     init = ensure_analytics_db()
     assert init["rows"] >= 20
@@ -256,12 +259,54 @@ def test_skill_registry() -> None:
     from skills import list_skills, match_and_execute_skill
 
     skills = list_skills()
-    assert len(skills) >= 5
+    assert len(skills) >= 6
     out = match_and_execute_skill("统计各渠道销量对比")
     assert out is not None
     assert out.skill_id == "channel_compare"
     assert "数据概览" in out.markdown
     print("PASS test_skill_registry")
+
+
+def test_inventory_skill_and_routing() -> None:
+    from skills import match_and_execute_skill
+    from state import SubTask
+    from supervisor import pick_worker_for_task
+
+    task = SubTask(task_id="T005", title="查询核心 SKU 渠道库存", description="")
+    assert pick_worker_for_task(task) == "executor"
+    out = match_and_execute_skill(task.title)
+    assert out is not None
+    assert out.skill_id == "inventory_lookup"
+    assert "可用" in out.markdown
+    print("PASS test_inventory_skill_and_routing")
+
+
+def test_retry_skips_successful_tasks() -> None:
+    from agents import run_worker_node
+    from state import ExecutionFlags, SubTask, TaskResult
+
+    state = create_initial_state("任务A、任务B、任务C")
+    state["task_list"] = [
+        SubTask(task_id="T001", title="任务A", status="success"),
+        SubTask(task_id="T002", title="任务B", status="failed"),
+        SubTask(task_id="T003", title="任务C", status="success"),
+    ]
+    state["task_results"] = {
+        "T001": TaskResult(task_id="T001", success=True, output="ok"),
+        "T002": TaskResult(task_id="T002", success=False, error="failed"),
+        "T003": TaskResult(task_id="T003", success=True, output="ok"),
+    }
+    state["execution_flags"] = ExecutionFlags(
+        planning_done=True,
+        execution_done=False,
+        retry_count=1,
+        max_retry=2,
+        current_task_index=0,
+    )
+    update = run_worker_node(state, node="executor", rag_k=0)
+    assert update["execution_flags"].current_task_index == 1
+    assert "跳过" in update["messages"][0].content
+    print("PASS test_retry_skips_successful_tasks")
 
 
 def test_supervisor_routing() -> None:
@@ -280,6 +325,8 @@ def test_supervisor_routing() -> None:
     assert pick_worker_for_task(task2) == "executor"
     task3 = SubTask(task_id="T003", title="统计各渠道销量排行", description="")
     assert pick_worker_for_task(task3) == "data_analyst"
+    task4 = SubTask(task_id="T004", title="查询核心 SKU 渠道库存", description="")
+    assert pick_worker_for_task(task4) == "executor"
     print("PASS test_supervisor_routing")
 
 
@@ -432,6 +479,8 @@ if __name__ == "__main__":
         test_rag_ingest_and_retrieve()
         test_data_analytics()
         test_skill_registry()
+        test_inventory_skill_and_routing()
+        test_retry_skips_successful_tasks()
         test_external_tools()
         test_supervisor_routing()
         test_reflection_retry_with_simulated_failure()
