@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      DEEPSEEK_API_KEY: ""
+      OPENAI_API_KEY: ""
+      AUTH_MODE: dev
+      DATABASE_URL: sqlite:///data/ci_app.db
+      CHECKPOINT_BACKEND: sqlite
+      LOG_JSON: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.lock -r requirements-dev.txt
+      - name: Lint correctness-sensitive rules
+        run: ruff check .
+      - name: Unit and integration tests
+        run: pytest
+      - name: Legacy smoke suite and demo
+        run: python main.py
+
+  security:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependency scanner
+        run: pip install pip-audit
+      - name: Dependency audit
+        run: >
+          pip-audit -r requirements.lock --desc
+          --ignore-vuln PYSEC-2026-311
+          --ignore-vuln PYSEC-2026-3813
+          --ignore-vuln PYSEC-2026-3814
+          --ignore-vuln PYSEC-2026-3815

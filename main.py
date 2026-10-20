@@ -41,7 +41,22 @@ def without_llm() -> Iterator[None]:
 
 
 @contextmanager
-def get_checkpointer(db_path: Path = CHECKPOINT_DB) -> Iterator[SqliteSaver]:
+def get_checkpointer(db_path: Path = CHECKPOINT_DB) -> Iterator[Any]:
+    backend = os.getenv("CHECKPOINT_BACKEND", "sqlite").strip().lower()
+    if backend == "postgres":
+        dsn = os.getenv("POSTGRES_DSN") or os.getenv("DATABASE_URL", "")
+        dsn = dsn.replace("postgresql+psycopg://", "postgresql://")
+        if not dsn:
+            raise RuntimeError("CHECKPOINT_BACKEND=postgres 但未配置 POSTGRES_DSN")
+        try:
+            from langgraph.checkpoint.postgres import PostgresSaver
+        except ImportError as exc:
+            raise RuntimeError("缺少 langgraph-checkpoint-postgres 依赖") from exc
+        with PostgresSaver.from_conn_string(dsn) as saver:
+            saver.setup()
+            yield saver
+        return
+
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     serde = create_checkpoint_serializer()

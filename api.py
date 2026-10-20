@@ -1,15 +1,31 @@
 from __future__ import annotations
 
 import os
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 load_dotenv()
 
+from infra.auth import Principal, require_roles
+from infra.db import init_db
+from infra.job_queue import cancel_jobs_for_run, enqueue_job
+from infra.logging import bind_context, clear_context, configure_logging, logger
+from infra.run_store import (
+    add_event,
+    create_run_record,
+    get_run,
+    list_events,
+    list_runs,
+    serialize_event,
+    serialize_run,
+    update_run,
+)
 from main import get_checkpointer, resume_run, run_until_pause_or_finish
 from paths import DOCUMENTS_DIR
 from prompt_optimizer import (
@@ -24,7 +40,34 @@ from prompt_optimizer import (
 )
 from rag_store import ingest_documents, list_document_files
 
-app = FastAPI(title="fmcg-agent-api", version="3.0")
+configure_logging()
+init_db()
+
+app = FastAPI(title="fmcg-agent-api", version="3.1")
+
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+    tokens = bind_context(request_id=request_id)
+    started = time.perf_counter()
+    response = None
+    try:
+        response = await call_next(request)
+        return response
+    finally:
+        status = response.status_code if response is not None else 500
+        latency_ms = (time.perf_counter() - started) * 1000
+        logger.info(
+            "http_request method=%s path=%s status=%s latency_ms=%.1f",
+            request.method,
+            request.url.path,
+            status,
+            latency_ms,
+        )
+        if response is not None:
+            response.headers["X-Request-ID"] = request_id
+        clear_context(tokens)
 
 
 class RunRequest(BaseModel):
@@ -47,6 +90,16 @@ class RunResponse(BaseModel):
 
 class ResumeRequest(BaseModel):
     thread_id: str
+    approved: bool = True
+    comment: str = ""
+
+
+class RunCreated(BaseModel):
+    run_id: str
+    status: str
+
+
+class RunResumeRequest(BaseModel):
     approved: bool = True
     comment: str = ""
 
@@ -190,6 +243,100 @@ def resume_task(req: ResumeRequest):
     flags = state.get("execution_flags")
     finished = getattr(flags, "is_finished", False) if flags else done
     return _build_response(state, tid, finished, interrupt_payload)
+
+
+@app.post("/v1/runs", response_model=RunCreated)
+def create_v1_run(
+    req: RunRequest,
+    principal: Principal = Depends(require_roles("admin", "analyst")),
+):
+    run = create_run_record(
+        tenant_id=principal.tenant_id,
+        user_id=principal.user_id,
+        user_input=req.user_input,
+        max_retry=req.max_retry,
+        auto_approve=req.auto_approve,
+    )
+    enqueue_job(run_id=run.id, action="start")
+    add_event(
+        run_id=run.id,
+        tenant_id=principal.tenant_id,
+        event_type="queued",
+        payload={"user_id": principal.user_id},
+    )
+    logger.info("run_queued run_id=%s tenant_id=%s", run.id, principal.tenant_id)
+    return RunCreated(run_id=run.id, status="queued")
+
+
+@app.get("/v1/runs")
+def list_v1_runs(
+    limit: int = 50,
+    principal: Principal = Depends(require_roles("admin", "analyst", "viewer")),
+):
+    rows = list_runs(principal.tenant_id, limit=min(max(limit, 1), 200))
+    return {"count": len(rows), "runs": [serialize_run(row) for row in rows]}
+
+
+@app.get("/v1/runs/{run_id}")
+def get_v1_run(
+    run_id: str,
+    principal: Principal = Depends(require_roles("admin", "analyst", "viewer")),
+):
+    run = get_run(principal.tenant_id, run_id)
+    if run is None:
+        raise HTTPException(404, "运行记录不存在")
+    events = list_events(principal.tenant_id, run_id)
+    return {
+        **serialize_run(run),
+        "events": [serialize_event(event) for event in events],
+    }
+
+
+@app.post("/v1/runs/{run_id}/resume", response_model=RunCreated)
+def resume_v1_run(
+    run_id: str,
+    req: RunResumeRequest,
+    principal: Principal = Depends(require_roles("admin", "analyst")),
+):
+    run = get_run(principal.tenant_id, run_id)
+    if run is None:
+        raise HTTPException(404, "运行记录不存在")
+    if run.status not in ("interrupted", "failed"):
+        raise HTTPException(409, f"当前状态不可恢复: {run.status}")
+    enqueue_job(
+        run_id=run.id,
+        action="resume",
+        payload={"approved": req.approved, "comment": req.comment},
+    )
+    update_run(run.id, status="queued", error=None)
+    add_event(
+        run_id=run.id,
+        tenant_id=principal.tenant_id,
+        event_type="resumed",
+        payload={"approved": req.approved, "comment": req.comment},
+    )
+    logger.info("run_resumed run_id=%s tenant_id=%s", run.id, principal.tenant_id)
+    return RunCreated(run_id=run.id, status="queued")
+
+
+@app.post("/v1/runs/{run_id}/cancel", response_model=RunCreated)
+def cancel_v1_run(
+    run_id: str,
+    principal: Principal = Depends(require_roles("admin", "analyst")),
+):
+    run = get_run(principal.tenant_id, run_id)
+    if run is None:
+        raise HTTPException(404, "运行记录不存在")
+    cancel_jobs_for_run(run.id)
+    update_run(run.id, status="cancelled")
+    add_event(
+        run_id=run.id,
+        tenant_id=principal.tenant_id,
+        event_type="cancelled",
+        payload={"user_id": principal.user_id},
+    )
+    logger.info("run_cancelled run_id=%s tenant_id=%s", run.id, principal.tenant_id)
+    return RunCreated(run_id=run.id, status="cancelled")
 
 
 @app.post("/documents/upload")

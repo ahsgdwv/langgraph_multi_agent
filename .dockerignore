@@ -1,0 +1,11 @@
+.git
+.venv
+.env
+.codebase-memory
+__pycache__
+*.pyc
+*.log
+reports
+data/chroma
+data/outputs
+data/*.db

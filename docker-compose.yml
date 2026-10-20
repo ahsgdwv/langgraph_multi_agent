@@ -1,0 +1,49 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: fmcg
+      POSTGRES_USER: fmcg
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fmcg -d fmcg"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    command: uvicorn api:app --host 0.0.0.0 --port 8000
+    environment:
+      DATABASE_URL: postgresql+psycopg://fmcg:${POSTGRES_PASSWORD:-change-me}@db:5432/fmcg
+      CHECKPOINT_BACKEND: postgres
+      POSTGRES_DSN: postgresql://fmcg:${POSTGRES_PASSWORD:-change-me}@db:5432/fmcg
+      AUTH_MODE: ${AUTH_MODE:-api_key}
+      API_KEYS_JSON: ${API_KEYS_JSON:-{}}
+      LOG_JSON: "true"
+      LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  worker:
+    build: .
+    command: python worker.py
+    environment:
+      DATABASE_URL: postgresql+psycopg://fmcg:${POSTGRES_PASSWORD:-change-me}@db:5432/fmcg
+      CHECKPOINT_BACKEND: postgres
+      POSTGRES_DSN: postgresql://fmcg:${POSTGRES_PASSWORD:-change-me}@db:5432/fmcg
+      LOG_JSON: "true"
+      LOG_LEVEL: INFO
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

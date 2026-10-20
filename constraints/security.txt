@@ -1,0 +1,10 @@
+# Security floors for transitive dependencies with available fixes.
+aiohttp>=3.14.4
+multidict>=6.9.1
+anyio>=4.14.2
+pillow>=12.3.0
+idna>=3.15
+urllib3>=2.8.0
+langgraph-sdk>=0.4.4
+langgraph-checkpoint-sqlite>=3.1.1
+oauthlib>=4.0.0

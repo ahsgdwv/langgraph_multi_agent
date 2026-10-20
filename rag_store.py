@@ -11,6 +11,7 @@ from pathlib import Path
 from langchain_core.embeddings import Embeddings
 
 from config import CFG
+from infra.settings import get_settings
 from paths import DOCUMENTS_DIR
 from state import RetrievedDoc
 
@@ -47,9 +48,15 @@ class HashingEmbeddings(Embeddings):
 
 
 def _embed_fn():
-    if os.getenv("OPENAI_API_KEY"):
+    settings = get_settings()
+    if settings.embedding_provider in ("auto", "openai") and os.getenv("OPENAI_API_KEY"):
         from langchain_openai import OpenAIEmbeddings
-        return OpenAIEmbeddings(api_key=os.getenv("OPENAI_API_KEY"))
+        return OpenAIEmbeddings(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            model=settings.embedding_model,
+        )
+    if settings.embedding_provider == "openai":
+        log.warning("EMBEDDING_PROVIDER=openai 但缺少 OPENAI_API_KEY，回退到哈希向量")
     return HashingEmbeddings(size=384)
 
 
@@ -118,6 +125,11 @@ def ingest_documents(*, force=False):
         return {"loaded": len(files), "chunks": n, "message": f"已有 {n} 条", "ok": True}
 
     if force or (n > 0 and _disk_names() != _index_names(vs)):
+        try:
+            # 先删除 collection，避免 Windows 文件锁导致 rmtree 失败后旧数据残留
+            vs.delete_collection()
+        except Exception as e:
+            log.warning("清空旧 collection 失败: %s", e)
         reset_vectorstore()
         if chroma_path.exists():
             shutil.rmtree(chroma_path, ignore_errors=True)

@@ -7,7 +7,7 @@
 ## 运行
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.lock
 copy .env.example .env    # 填 DEEPSEEK_API_KEY
 python ui.py              # http://localhost:7860
 python main.py            # 无 LLM 的集成测试
@@ -30,6 +30,41 @@ GET  /prompt/templates  # ?mode=system|user|iterate
 ```
 
 常用模板：`system_agent` / `system_compact` / `user_fmcg` / `iterate_shorten`。
+
+## 企业化基础
+
+新增了异步运行、租户鉴权、运行历史、结构化日志、RAG 评测和 CI 骨架。
+
+```bash
+python worker.py                         # 消费异步任务
+uvicorn api:app --port 8000              # API
+python -m evals.rag_eval --rebuild       # RAG 黄金集评测
+pytest                                   # 企业化基础测试
+```
+
+异步接口：
+
+```bash
+POST /v1/runs                 # 创建异步运行，返回 run_id
+GET  /v1/runs                 # 当前租户的运行历史
+GET  /v1/runs/{run_id}        # 状态、结果、指标与事件
+POST /v1/runs/{run_id}/resume # 提交人工审批并重新入队
+POST /v1/runs/{run_id}/cancel # 取消未完成任务
+```
+
+本地默认 `AUTH_MODE=dev`，可以通过 `X-Tenant-ID` / `X-User-ID` 模拟租户；生产环境建议设置 `AUTH_MODE=api_key` 和 `API_KEYS_JSON`，或替换成公司 SSO/OIDC。
+
+PostgreSQL + worker 的容器编排见 `docker-compose.yml`，切换后设置：
+
+```bash
+DATABASE_URL=postgresql+psycopg://fmcg:change-me@db:5432/fmcg
+CHECKPOINT_BACKEND=postgres
+POSTGRES_DSN=postgresql://fmcg:change-me@db:5432/fmcg
+```
+
+原有 `POST /run` 仍保留为同步兼容接口，适合本地演示；企业接入建议使用 `/v1/runs`。
+
+依赖安装优先使用已验证的 `requirements.lock`。CI 会执行 ruff、pytest、原有 smoke suite 和依赖安全扫描；当前 Chroma 的已知漏洞与迁移建议记录在 `security/known-vulns.md`。
 
 仓库：[github.com/ahsgdwv/langgraph_multi_agent](https://github.com/ahsgdwv/langgraph_multi_agent)
 

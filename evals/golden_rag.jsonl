@@ -1,0 +1,7 @@
+{"query":"便利店陈列费上限是多少", "expected_sources":["fmcg_channel_policy.md"], "expected_terms":["8%", "陈列费"]}
+{"query":"商超端架促销费用上限", "expected_sources":["fmcg_channel_policy.md"], "expected_terms":["5,000", "端架"]}
+{"query":"电商活动费比超过多少需要审批", "expected_sources":["fmcg_channel_policy.md"], "expected_terms":["12%", "ROI"]}
+{"query":"480ml 气泡水零售价", "expected_sources":["fmcg_channel_policy.md", "product_catalog.md"], "expected_terms":["5 元"]}
+{"query":"电解质水运动场景折扣", "expected_sources":["fmcg_channel_policy.md"], "expected_terms":["9 折", "电解质水"]}
+{"query":"SKU 销售排行分析流程", "expected_sources":["fmcg_analysis_playbook.md"], "expected_terms":["sku_ranking", "排行"]}
+{"query":"渠道库存补货建议", "expected_sources":["fmcg_analysis_playbook.md"], "expected_terms":["inventory_lookup", "库存"]}
