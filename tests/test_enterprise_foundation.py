@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from infra.auth import get_principal
+from infra.audit_store import append_audit, verify_audit_chain
 from infra.logging import JsonFormatter, bind_context, clear_context
 from infra.settings import get_settings
 from state import create_initial_state
@@ -61,6 +62,29 @@ def test_api_key_auth_and_invalid_key(monkeypatch):
         get_settings.cache_clear()
 
 
+def test_oidc_claims_and_role_mapping(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "oidc")
+    get_settings.cache_clear()
+    monkeypatch.setattr(
+        "infra.auth._decode_oidc_token",
+        lambda token, settings: {
+            "sub": "user-1",
+            "tenant_id": "acme",
+            "roles": ["analyst", "viewer"],
+        },
+    )
+    try:
+        principal = get_principal(
+            _request({"Authorization": "Bearer opaque-token"})
+        )
+        assert principal.tenant_id == "acme"
+        assert principal.user_id == "user-1"
+        assert principal.role == "analyst"
+    finally:
+        monkeypatch.delenv("AUTH_MODE", raising=False)
+        get_settings.cache_clear()
+
+
 def test_json_logging_includes_run_context():
     tokens = bind_context(run_id="run-1", tenant_id="acme")
     try:
@@ -103,6 +127,34 @@ def test_job_queue_deduplicates_and_heartbeats():
     assert claimed is not None
     assert heartbeat_job(claimed["job_id"], "worker-1") is True
     assert heartbeat_job(claimed["job_id"], "worker-2") is False
+
+
+def test_audit_chain_detects_tampering():
+    from infra.db import tenant_session
+    from infra.models import AuditRecord
+
+    append_audit(
+        tenant_id="audit-test",
+        actor_id="alice",
+        action="run.create",
+        resource_type="run",
+        resource_id="run-1",
+        details={"a": 1},
+    )
+    append_audit(
+        tenant_id="audit-test",
+        actor_id="alice",
+        action="run.finish",
+        resource_type="run",
+        resource_id="run-1",
+        details={"ok": True},
+    )
+    assert verify_audit_chain("audit-test")["valid"] is True
+
+    with tenant_session("audit-test") as session:
+        record = session.query(AuditRecord).order_by(AuditRecord.id.asc()).first()
+        record.details_json = {"tampered": True}
+    assert verify_audit_chain("audit-test")["valid"] is False
 
 
 def test_async_run_queue_and_worker():

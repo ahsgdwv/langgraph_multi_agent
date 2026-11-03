@@ -320,7 +320,12 @@ def execute_task(
         return skill_result
 
     query = f"{task.title} {task.description} {state['user_input'][:200]}"
-    docs = retrieve_context(query, k=rag_k)
+    docs = retrieve_context(
+        query,
+        k=rag_k,
+        tenant_id=state.get("tenant_id"),
+        role=state.get("user_role"),
+    )
     metrics.rag_queries += 1
     policy_context = format_retrieved_context(docs)
     prefetched = prefetch_tools_for_task(task, metrics)
@@ -433,7 +438,12 @@ def run_worker_node(
     status = "成功" if outcome.success else "失败"
     retry = f" retry={flags.retry_count}/{flags.max_retry}" if flags.retry_count else ""
     detail = (outcome.output or outcome.error or "")[:120]
-    retrieved = retrieve_context(f"{current.title} {current.description}", k=2)
+    retrieved = retrieve_context(
+        f"{current.title} {current.description}",
+        k=2,
+        tenant_id=state.get("tenant_id"),
+        role=state.get("user_role"),
+    )
     merged_ctx = append_retrieved_docs(
         {**state, "retrieved_context": state.get("retrieved_context") or []},
         retrieved,

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from infra.db import get_engine, session_scope
+from infra.db import get_engine, session_scope, tenant_session
 from infra.models import JobRecord, RunRecord
 from infra.settings import get_settings
 
@@ -18,8 +18,10 @@ def enqueue_job(
     action: str = "start",
     payload: dict | None = None,
     max_attempts: int | None = None,
+    tenant_id: str | None = None,
 ) -> JobRecord:
-    with session_scope() as session:
+    context = tenant_session(tenant_id) if tenant_id else session_scope()
+    with context as session:
         existing = (
             session.query(JobRecord)
             .filter(
@@ -31,21 +33,19 @@ def enqueue_job(
         )
         if existing is not None:
             return existing
-
-    job = JobRecord(
-        id=uuid4().hex,
-        run_id=run_id,
-        action=action,
-        payload_json=payload or {},
-        status="pending",
-        attempts=0,
-        max_attempts=max_attempts or get_settings().job_max_attempts,
-        available_at=_now(),
-    )
-    with session_scope() as session:
+        job = JobRecord(
+            id=uuid4().hex,
+            run_id=run_id,
+            action=action,
+            payload_json=payload or {},
+            status="pending",
+            attempts=0,
+            max_attempts=max_attempts or get_settings().job_max_attempts,
+            available_at=_now(),
+        )
         session.add(job)
         session.flush()
-    return job
+        return job
 
 
 def claim_job(worker_id: str) -> dict | None:
@@ -129,8 +129,9 @@ def fail_job(
         return should_retry
 
 
-def cancel_jobs_for_run(run_id: str) -> None:
-    with session_scope() as session:
+def cancel_jobs_for_run(run_id: str, *, tenant_id: str | None = None) -> None:
+    context = tenant_session(tenant_id) if tenant_id else session_scope()
+    with context as session:
         jobs = (
             session.query(JobRecord)
             .filter(JobRecord.run_id == run_id)

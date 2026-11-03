@@ -12,6 +12,12 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 
+from infra.audit_store import (
+    append_audit,
+    list_audit,
+    serialize_audit,
+    verify_audit_chain,
+)
 from infra.auth import Principal, require_roles
 from infra.db import init_db
 from infra.job_queue import cancel_jobs_for_run, enqueue_job
@@ -256,13 +262,22 @@ def create_v1_run(
         user_input=req.user_input,
         max_retry=req.max_retry,
         auto_approve=req.auto_approve,
+        role=principal.role,
     )
-    enqueue_job(run_id=run.id, action="start")
+    enqueue_job(run_id=run.id, action="start", tenant_id=principal.tenant_id)
     add_event(
         run_id=run.id,
         tenant_id=principal.tenant_id,
         event_type="queued",
         payload={"user_id": principal.user_id},
+    )
+    append_audit(
+        tenant_id=principal.tenant_id,
+        actor_id=principal.user_id,
+        action="run.create",
+        resource_type="run",
+        resource_id=run.id,
+        details={"max_retry": req.max_retry, "auto_approve": req.auto_approve},
     )
     logger.info("run_queued run_id=%s tenant_id=%s", run.id, principal.tenant_id)
     return RunCreated(run_id=run.id, status="queued")
@@ -307,13 +322,22 @@ def resume_v1_run(
         run_id=run.id,
         action="resume",
         payload={"approved": req.approved, "comment": req.comment},
+        tenant_id=principal.tenant_id,
     )
-    update_run(run.id, status="queued", error=None)
+    update_run(run.id, tenant_id=principal.tenant_id, status="queued", error=None)
     add_event(
         run_id=run.id,
         tenant_id=principal.tenant_id,
         event_type="resumed",
         payload={"approved": req.approved, "comment": req.comment},
+    )
+    append_audit(
+        tenant_id=principal.tenant_id,
+        actor_id=principal.user_id,
+        action="run.resume",
+        resource_type="run",
+        resource_id=run.id,
+        details={"approved": req.approved},
     )
     logger.info("run_resumed run_id=%s tenant_id=%s", run.id, principal.tenant_id)
     return RunCreated(run_id=run.id, status="queued")
@@ -327,16 +351,40 @@ def cancel_v1_run(
     run = get_run(principal.tenant_id, run_id)
     if run is None:
         raise HTTPException(404, "运行记录不存在")
-    cancel_jobs_for_run(run.id)
-    update_run(run.id, status="cancelled")
+    cancel_jobs_for_run(run.id, tenant_id=principal.tenant_id)
+    update_run(run.id, tenant_id=principal.tenant_id, status="cancelled")
     add_event(
         run_id=run.id,
         tenant_id=principal.tenant_id,
         event_type="cancelled",
         payload={"user_id": principal.user_id},
     )
+    append_audit(
+        tenant_id=principal.tenant_id,
+        actor_id=principal.user_id,
+        action="run.cancel",
+        resource_type="run",
+        resource_id=run.id,
+        details={},
+    )
     logger.info("run_cancelled run_id=%s tenant_id=%s", run.id, principal.tenant_id)
     return RunCreated(run_id=run.id, status="cancelled")
+
+
+@app.get("/v1/audit")
+def get_audit_log(
+    limit: int = 100,
+    principal: Principal = Depends(require_roles("admin")),
+):
+    rows = list_audit(principal.tenant_id, limit=min(max(limit, 1), 500))
+    return {"count": len(rows), "entries": [serialize_audit(row) for row in rows]}
+
+
+@app.get("/v1/audit/verify")
+def verify_audit(
+    principal: Principal = Depends(require_roles("admin")),
+):
+    return verify_audit_chain(principal.tenant_id)
 
 
 @app.post("/documents/upload")

@@ -204,7 +204,12 @@ class PolicyLookupSkill(BaseSkill):
     priority = 30
 
     def _execute(self, text: str, ctx: SkillContext) -> SkillOutput:
-        docs = retrieve_context(text, k=CFG.rag.default_k)
+        docs = retrieve_context(
+            text,
+            k=CFG.rag.default_k,
+            tenant_id=ctx.tenant_id,
+            role=ctx.user_role,
+        )
         rag_text = format_retrieved_context(docs)
         sources = [d.source for d in docs]
 
@@ -240,7 +245,12 @@ class IntegratedReportSkill(BaseSkill):
             .sort_values("revenue", ascending=False)
             .head(5)
         )
-        docs = retrieve_context(text, k=CFG.rag.default_k)
+        docs = retrieve_context(
+            text,
+            k=CFG.rag.default_k,
+            tenant_id=ctx.tenant_id,
+            role=ctx.user_role,
+        )
         rag_text = format_retrieved_context(docs)
 
         if channel_df.empty or sku_df.empty:

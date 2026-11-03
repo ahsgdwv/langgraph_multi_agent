@@ -79,6 +79,8 @@ def run_until_pause_or_finish(
     checkpointer: Optional[SqliteSaver] = None,
     resume_payload: Optional[Any] = None,
     auto_approve_human: Optional[bool] = None,
+    tenant_id: str = "demo",
+    user_role: str = "admin",
     verbose: bool = True,
 ) -> tuple[AgentState, bool, Optional[dict]]:
     app = get_app(checkpointer=checkpointer)
@@ -94,6 +96,8 @@ def run_until_pause_or_finish(
             max_retry=max_retry,
             simulate_fail_task_ids=simulate_fail_task_ids,
             auto_approve_human=auto_approve_human,
+            tenant_id=tenant_id,
+            user_role=user_role,
         )
 
     if verbose and resume_payload is None:
@@ -132,6 +136,8 @@ def run_until_pause_or_finish(
                 user_input,
                 thread_id=tid,
                 auto_approve_human=auto_approve_human,
+                tenant_id=tenant_id,
+                user_role=user_role,
             )
         )
 

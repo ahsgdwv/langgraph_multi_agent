@@ -565,3 +565,9 @@ yarl==1.25.1
 zstandard==0.25.0
     # via
     #   langsmith
+
+# OIDC/JWT authentication
+cffi==2.1.1
+cryptography==50.0.2
+PyJWT==2.10.1
+pycparser==2.22

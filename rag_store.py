@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
 import os
@@ -20,6 +21,7 @@ from state import RetrievedDoc
 log = logging.getLogger(__name__)
 chroma_path = Path(CFG.rag.chroma_dir)
 chroma_lock = FileLock(str(PROJECT_ROOT / "data" / ".chroma.lock"))
+acl_path = PROJECT_ROOT / "data" / "document_acl.json"
 _chroma = None
 
 
@@ -95,6 +97,30 @@ def list_document_files():
 
 def _disk_names():
     return {p.name for p in list_document_files()}
+
+
+def _allowed_sources(tenant_id: str | None, role: str | None) -> set[str] | None:
+    if not tenant_id:
+        return None
+    if not acl_path.exists():
+        log.warning("缺少 %s，暂不启用文档 ACL", acl_path)
+        return None
+    try:
+        manifest = json.loads(acl_path.read_text(encoding="utf-8"))
+    except Exception as e:
+        log.warning("读取文档 ACL 失败: %s", e)
+        return set()
+
+    allowed: set[str] = set()
+    effective_role = role or "viewer"
+    for source, policy in manifest.items():
+        tenants = set(policy.get("tenants", []))
+        roles = set(policy.get("roles", []))
+        if ("*" in tenants or tenant_id in tenants) and (
+            "*" in roles or effective_role in roles
+        ):
+            allowed.add(source)
+    return allowed
 
 
 def _index_names(store):
@@ -179,11 +205,18 @@ def ingest_documents(*, force=False):
 
 
 @_with_chroma_lock
-def retrieve_context(query: str, *, k=None) -> list[RetrievedDoc]:
+def retrieve_context(
+    query: str,
+    *,
+    k=None,
+    tenant_id: str | None = None,
+    role: str | None = None,
+) -> list[RetrievedDoc]:
     topk = k or CFG.rag.default_k
     if not query or not query.strip():
         return []
     allowed = _disk_names()
+    acl_allowed = _allowed_sources(tenant_id, role)
 
     try:
         vs = get_vectorstore()
@@ -212,6 +245,8 @@ def retrieve_context(query: str, *, k=None) -> list[RetrievedDoc]:
     for page, score in hits:
         src = str(page.metadata.get("source", "unknown"))
         if allowed and src not in allowed:
+            continue
+        if acl_allowed is not None and src not in acl_allowed:
             continue
         key = (src, page.page_content.strip()[:240])
         if key in seen:

@@ -53,7 +53,9 @@ POST /v1/runs/{run_id}/resume # 提交人工审批并重新入队
 POST /v1/runs/{run_id}/cancel # 取消未完成任务
 ```
 
-本地默认 `AUTH_MODE=dev`，可以通过 `X-Tenant-ID` / `X-User-ID` 模拟租户；生产环境建议设置 `AUTH_MODE=api_key` 和 `API_KEYS_JSON`，或替换成公司 SSO/OIDC。
+本地默认 `AUTH_MODE=dev`，可以通过 `X-Tenant-ID` / `X-User-ID` 模拟租户；生产环境支持 `AUTH_MODE=api_key` 或 `AUTH_MODE=oidc`（配置 `OIDC_ISSUER`、`OIDC_AUDIENCE`、`OIDC_JWKS_URL`）。
+
+文档访问由 `data/document_acl.json` 控制，审计日志使用哈希链保存到 `audit_log`。PostgreSQL RLS 策略在 `security/postgres_rls.sql`，部署说明见 `security/postgres-rls.md`。
 
 PostgreSQL + worker 的容器编排见 `docker-compose.yml`，切换后设置：
 

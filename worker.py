@@ -4,6 +4,7 @@ import time
 from threading import Event, Thread
 from uuid import uuid4
 
+from infra.audit_store import append_audit
 from infra.db import init_db
 from infra.job_queue import (
     claim_job,
@@ -44,6 +45,14 @@ def process_job(job: dict, worker_id: str) -> None:
         event_type="started",
         payload={"job_id": job["job_id"], "worker_id": worker_id},
     )
+    append_audit(
+        tenant_id=run.tenant_id,
+        actor_id=f"worker:{worker_id}",
+        action="run.start",
+        resource_type="run",
+        resource_id=run.id,
+        details={"job_id": job["job_id"], "action": job["action"]},
+    )
     stop_heartbeat = Event()
 
     def heartbeat_loop() -> None:
@@ -67,6 +76,8 @@ def process_job(job: dict, worker_id: str) -> None:
                     thread_id=run.id,
                     max_retry=run.max_retry,
                     auto_approve_human=run.auto_approve,
+                    tenant_id=run.tenant_id,
+                    user_role=run.role,
                     checkpointer=checkpointer,
                     verbose=False,
                 )
@@ -77,6 +88,14 @@ def process_job(job: dict, worker_id: str) -> None:
             tenant_id=run.tenant_id,
             event_type=status,
             payload={"job_id": job["job_id"]},
+        )
+        append_audit(
+            tenant_id=run.tenant_id,
+            actor_id=f"worker:{worker_id}",
+            action="run.finish",
+            resource_type="run",
+            resource_id=run.id,
+            details={"status": status, "job_id": job["job_id"]},
         )
         complete_job(
             job["job_id"],
@@ -102,6 +121,14 @@ def process_job(job: dict, worker_id: str) -> None:
             tenant_id=run.tenant_id,
             event_type="retry_scheduled" if retry else "failed",
             payload={"job_id": job["job_id"], "error": str(exc)},
+        )
+        append_audit(
+            tenant_id=run.tenant_id,
+            actor_id=f"worker:{worker_id}",
+            action="run.retry" if retry else "run.failure",
+            resource_type="run",
+            resource_id=run.id,
+            details={"error": str(exc)[:500], "job_id": job["job_id"]},
         )
         logger.exception("job_failed run_id=%s retry=%s", run.id, retry)
     finally:

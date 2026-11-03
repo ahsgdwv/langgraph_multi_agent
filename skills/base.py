@@ -16,6 +16,8 @@ class SkillContext(BaseModel):
     user_input: str = ""
     task_id: str = ""
     thread_id: str = ""
+    tenant_id: str = "demo"
+    user_role: str = "admin"
     retrieved_docs: list[dict] = Field(default_factory=list)
 
 
@@ -25,6 +27,8 @@ def skill_context_from_state(state: "AgentState", task_id: str = "") -> SkillCon
         user_input=state.get("user_input", ""),
         task_id=task_id,
         thread_id=state.get("thread_id", ""),
+        tenant_id=state.get("tenant_id", "demo"),
+        user_role=state.get("user_role", "admin"),
         retrieved_docs=[
             d.model_dump() if hasattr(d, "model_dump") else dict(d) for d in docs
         ],

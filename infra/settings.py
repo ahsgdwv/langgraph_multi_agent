@@ -26,8 +26,14 @@ class Settings(BaseSettings):
     checkpoint_sqlite_path: str = "data/checkpoints.db"
     postgres_dsn: str = ""
 
-    auth_mode: Literal["dev", "api_key"] = "dev"
+    auth_mode: Literal["dev", "api_key", "oidc"] = "dev"
     api_keys_json: str = ""
+    oidc_issuer: str = ""
+    oidc_audience: str = ""
+    oidc_jwks_url: str = ""
+    oidc_algorithms: str = "RS256,ES256"
+    oidc_tenant_claim: str = "tenant_id"
+    oidc_role_claim: str = "role"
 
     log_level: str = "INFO"
     log_json: bool = True
@@ -54,6 +60,10 @@ class Settings(BaseSettings):
             for key, value in parsed.items()
             if isinstance(value, dict)
         }
+
+    @property
+    def oidc_algorithm_list(self) -> list[str]:
+        return [item.strip() for item in self.oidc_algorithms.split(",") if item.strip()]
 
 
 @lru_cache

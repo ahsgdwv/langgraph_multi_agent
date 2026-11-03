@@ -121,6 +121,8 @@ class AgentState(TypedDict):
     supervisor_decision: str
     use_supervisor: bool
     auto_approve_human: bool
+    tenant_id: str
+    user_role: str
 
 
 def create_initial_state(
@@ -131,6 +133,8 @@ def create_initial_state(
     simulate_fail_task_ids: Optional[list[str]] = None,
     use_supervisor: bool = True,
     auto_approve_human: Optional[bool] = None,
+    tenant_id: str = "demo",
+    user_role: str = "admin",
 ) -> AgentState:
     if auto_approve_human is None:
         raw = os.getenv("AUTO_APPROVE_HUMAN")
@@ -156,6 +160,8 @@ def create_initial_state(
         supervisor_decision="",
         use_supervisor=use_supervisor,
         auto_approve_human=auto_approve_human,
+        tenant_id=tenant_id,
+        user_role=user_role,
     )
 
 

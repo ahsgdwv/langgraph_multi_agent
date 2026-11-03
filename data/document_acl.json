@@ -1,0 +1,14 @@
+{
+  "fmcg_analysis_playbook.md": {
+    "tenants": ["demo", "acme"],
+    "roles": ["admin", "analyst", "viewer"]
+  },
+  "fmcg_channel_policy.md": {
+    "tenants": ["demo", "acme"],
+    "roles": ["admin", "analyst", "viewer"]
+  },
+  "product_catalog.md": {
+    "tenants": ["demo", "acme"],
+    "roles": ["admin", "analyst", "viewer"]
+  }
+}
