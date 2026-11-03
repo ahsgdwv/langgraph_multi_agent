@@ -41,8 +41,11 @@ class Settings(BaseSettings):
     job_max_attempts: int = Field(default=3, ge=1)
     worker_id: str = ""
 
+    vector_backend: Literal["chroma", "pgvector"] = "chroma"
     embedding_provider: Literal["auto", "hash", "openai"] = "auto"
     embedding_model: str = "text-embedding-3-small"
+    embedding_dimensions: int = 384
+    shared_document_tenant: str = "shared"
 
     @property
     def api_keys(self) -> dict[str, dict[str, str]]:

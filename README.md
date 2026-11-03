@@ -57,6 +57,8 @@ POST /v1/runs/{run_id}/cancel # 取消未完成任务
 
 文档访问由 `data/document_acl.json` 控制，审计日志使用哈希链保存到 `audit_log`。PostgreSQL RLS 策略在 `security/postgres_rls.sql`，部署说明见 `security/postgres-rls.md`。
 
+向量后端默认 `chroma`；设置 `VECTOR_BACKEND=pgvector`、`EMBEDDING_DIMENSIONS=384` 并使用带 pgvector 的 PostgreSQL 后，文档会写入 `document_chunks` 表。迁移脚本和注意事项见 `security/pgvector.md`。
+
 PostgreSQL + worker 的容器编排见 `docker-compose.yml`，切换后设置：
 
 ```bash

@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: fmcg
       POSTGRES_USER: fmcg
@@ -26,6 +26,8 @@ services:
       API_KEYS_JSON: ${API_KEYS_JSON:-{}}
       LOG_JSON: "true"
       LOG_LEVEL: INFO
+      VECTOR_BACKEND: pgvector
+      EMBEDDING_DIMENSIONS: "384"
     ports:
       - "8000:8000"
     depends_on:
@@ -41,6 +43,8 @@ services:
       POSTGRES_DSN: postgresql://fmcg:${POSTGRES_PASSWORD:-change-me}@db:5432/fmcg
       LOG_JSON: "true"
       LOG_LEVEL: INFO
+      VECTOR_BACKEND: pgvector
+      EMBEDDING_DIMENSIONS: "384"
     depends_on:
       db:
         condition: service_healthy

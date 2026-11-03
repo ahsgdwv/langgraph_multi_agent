@@ -53,3 +53,34 @@ jobs:
           --ignore-vuln PYSEC-2026-3813
           --ignore-vuln PYSEC-2026-3814
           --ignore-vuln PYSEC-2026-3815
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: fmcg
+          POSTGRES_USER: fmcg
+          POSTGRES_PASSWORD: fmcg
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fmcg -d fmcg"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      POSTGRES_DSN: postgresql://fmcg:fmcg@localhost:5432/fmcg
+      DATABASE_URL: postgresql+psycopg://fmcg:fmcg@localhost:5432/fmcg
+      VECTOR_BACKEND: pgvector
+      EMBEDDING_DIMENSIONS: "384"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.lock -r requirements-dev.txt
+      - name: PostgreSQL RLS and pgvector integration
+        run: pytest tests/test_postgres_integration.py -q

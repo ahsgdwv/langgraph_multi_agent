@@ -59,10 +59,11 @@ def _embed_fn():
         return OpenAIEmbeddings(
             api_key=os.getenv("OPENAI_API_KEY"),
             model=settings.embedding_model,
+            dimensions=settings.embedding_dimensions,
         )
     if settings.embedding_provider == "openai":
         log.warning("EMBEDDING_PROVIDER=openai 但缺少 OPENAI_API_KEY，回退到哈希向量")
-    return HashingEmbeddings(size=384)
+    return HashingEmbeddings(size=settings.embedding_dimensions)
 
 
 def get_vectorstore():
@@ -152,6 +153,49 @@ def ingest_documents(*, force=False):
     if not files:
         return {"loaded": 0, "chunks": 0, "message": "没文档", "ok": False}
 
+    if get_settings().vector_backend == "pgvector":
+        from infra.pgvector_store import replace_chunks
+
+        docs = []
+        for fp in files:
+            try:
+                txt = fp.read_text(encoding="utf-8")
+            except OSError as e:
+                log.error("读 %s 失败: %s", fp.name, e)
+                continue
+            if txt.strip():
+                docs.append(
+                    Document(
+                        page_content=txt,
+                        metadata={"source": fp.name, "path": str(fp)},
+                    )
+                )
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=CFG.rag.chunk_size,
+            chunk_overlap=CFG.rag.chunk_overlap,
+        )
+        chunks = splitter.split_documents(docs)
+        embedder = _embed_fn()
+        vectors = embedder.embed_documents([chunk.page_content for chunk in chunks])
+        replace_chunks(
+            [
+                {
+                    "source": chunk.metadata["source"],
+                    "content": chunk.page_content,
+                    "embedding": vector,
+                }
+                for chunk, vector in zip(chunks, vectors)
+            ],
+            tenant_id=get_settings().shared_document_tenant,
+        )
+        return {
+            "loaded": len(docs),
+            "chunks": len(chunks),
+            "files": [f.name for f in files],
+            "message": f"pgvector 入库 {len(docs)} 文件",
+            "ok": True,
+        }
+
     try:
         vs = get_vectorstore()
         n = vs._collection.count()
@@ -217,6 +261,25 @@ def retrieve_context(
         return []
     allowed = _disk_names()
     acl_allowed = _allowed_sources(tenant_id, role)
+
+    if get_settings().vector_backend == "pgvector":
+        from infra.pgvector_store import search_chunks
+
+        embedding = _embed_fn().embed_query(query)
+        rows = search_chunks(
+            embedding,
+            tenant_id=tenant_id or get_settings().shared_document_tenant,
+            k=topk,
+            allowed_sources=sorted(acl_allowed) if acl_allowed is not None else None,
+        )
+        return [
+            RetrievedDoc(
+                source=row["source"],
+                content=row["content"],
+                score=round(row["score"], 4),
+            )
+            for row in rows
+        ]
 
     try:
         vs = get_vectorstore()

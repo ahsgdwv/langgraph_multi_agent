@@ -571,3 +571,4 @@ cffi==2.1.1
 cryptography==50.0.2
 PyJWT==2.10.1
 pycparser==2.22
+pgvector==0.5.1
