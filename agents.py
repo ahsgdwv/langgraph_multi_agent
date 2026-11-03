@@ -87,7 +87,11 @@ def task_result(raw: TaskResult | dict | None, task_id: str) -> TaskResult:
     return TaskResult(task_id=task_id, success=False, error="未知结果类型")
 
 
-def auto_approve() -> bool:
+def auto_approve(state: AgentState | None = None) -> bool:
+    if state is not None:
+        explicit = state.get("auto_approve_human")
+        if explicit is not None:
+            return bool(explicit)
     # 运行时读取，避免 CFG 在 import 时固化导致请求级配置失效
     raw = os.getenv("AUTO_APPROVE_HUMAN")
     return raw is not None and raw.strip().lower() in ("1", "true", "yes", "on")
@@ -194,7 +198,7 @@ def human_review_dispatch_node(state: AgentState) -> dict:
     if stage_approved(state, "post_dispatch"):
         return {"messages": [AIMessage(content="[人工确认] 分发已确认")]}
 
-    if auto_approve():
+    if auto_approve(state):
         return apply_human_decision(
             state, "post_dispatch", {"approved": True, "comment": "自动批准"}
         )
@@ -589,7 +593,7 @@ def human_review_summary_node(state: AgentState) -> dict:
     if stage_approved(state, "pre_summary"):
         return {"messages": [AIMessage(content="[人工确认] 总结已确认")]}
 
-    if auto_approve():
+    if auto_approve(state):
         return apply_human_decision(
             state, "pre_summary", {"approved": True, "comment": "自动批准"}
         )

@@ -6,17 +6,20 @@ import math
 import os
 import re
 import shutil
+from functools import wraps
 from pathlib import Path
 
+from filelock import FileLock
 from langchain_core.embeddings import Embeddings
 
 from config import CFG
 from infra.settings import get_settings
-from paths import DOCUMENTS_DIR
+from paths import DOCUMENTS_DIR, PROJECT_ROOT
 from state import RetrievedDoc
 
 log = logging.getLogger(__name__)
 chroma_path = Path(CFG.rag.chroma_dir)
+chroma_lock = FileLock(str(PROJECT_ROOT / "data" / ".chroma.lock"))
 _chroma = None
 
 
@@ -104,6 +107,16 @@ def _index_names(store):
         return set()
 
 
+def _with_chroma_lock(function):
+    @wraps(function)
+    def wrapper(*args, **kwargs):
+        with chroma_lock:
+            return function(*args, **kwargs)
+
+    return wrapper
+
+
+@_with_chroma_lock
 def ingest_documents(*, force=False):
     global _chroma
     from langchain_core.documents import Document
@@ -165,6 +178,7 @@ def ingest_documents(*, force=False):
     }
 
 
+@_with_chroma_lock
 def retrieve_context(query: str, *, k=None) -> list[RetrievedDoc]:
     topk = k or CFG.rag.default_k
     if not query or not query.strip():

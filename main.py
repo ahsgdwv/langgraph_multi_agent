@@ -78,6 +78,7 @@ def run_until_pause_or_finish(
     simulate_fail_task_ids: Optional[list[str]] = None,
     checkpointer: Optional[SqliteSaver] = None,
     resume_payload: Optional[Any] = None,
+    auto_approve_human: Optional[bool] = None,
     verbose: bool = True,
 ) -> tuple[AgentState, bool, Optional[dict]]:
     app = get_app(checkpointer=checkpointer)
@@ -92,6 +93,7 @@ def run_until_pause_or_finish(
             thread_id=tid,
             max_retry=max_retry,
             simulate_fail_task_ids=simulate_fail_task_ids,
+            auto_approve_human=auto_approve_human,
         )
 
     if verbose and resume_payload is None:
@@ -123,7 +125,15 @@ def run_until_pause_or_finish(
     if isinstance(final_values, dict) and "user_input" in final_values:
         state: AgentState = final_values  # type: ignore[assignment]
     else:
-        state = app.invoke(None, config) if finished else create_initial_state(user_input, thread_id=tid)
+        state = (
+            app.invoke(None, config)
+            if finished
+            else create_initial_state(
+                user_input,
+                thread_id=tid,
+                auto_approve_human=auto_approve_human,
+            )
+        )
 
     if finished and verbose:
         _print_final_report(state)
@@ -148,10 +158,13 @@ def resume_run(
 
 
 def run(user_input: str, *, verbose: bool = True, max_retry: int = 2) -> AgentState:
-    os.environ["AUTO_APPROVE_HUMAN"] = "true"
     with get_checkpointer() as cp:
         state, finished, _ = run_until_pause_or_finish(
-            user_input, checkpointer=cp, max_retry=max_retry, verbose=verbose
+            user_input,
+            checkpointer=cp,
+            max_retry=max_retry,
+            auto_approve_human=True,
+            verbose=verbose,
         )
         tid = state.get("thread_id", "")
         while not finished:

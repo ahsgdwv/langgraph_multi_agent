@@ -10,6 +10,7 @@ from starlette.requests import Request
 from infra.auth import get_principal
 from infra.logging import JsonFormatter, bind_context, clear_context
 from infra.settings import get_settings
+from state import create_initial_state
 
 
 def _request(headers: dict[str, str]) -> Request:
@@ -72,6 +73,36 @@ def test_json_logging_includes_run_context():
         assert payload["tenant_id"] == "acme"
     finally:
         clear_context(tokens)
+
+
+def test_auto_approve_is_per_run(monkeypatch):
+    from agents import auto_approve
+
+    monkeypatch.setenv("AUTO_APPROVE_HUMAN", "true")
+    state = create_initial_state("统计渠道销量", auto_approve_human=False)
+    assert state["auto_approve_human"] is False
+    assert auto_approve(state) is False
+
+
+def test_job_queue_deduplicates_and_heartbeats():
+    from infra.job_queue import claim_job, enqueue_job, heartbeat_job
+    from infra.run_store import create_run_record
+
+    run = create_run_record(
+        tenant_id="acme",
+        user_id="alice",
+        user_input="统计渠道销量",
+        max_retry=0,
+        auto_approve=True,
+    )
+    first = enqueue_job(run_id=run.id)
+    second = enqueue_job(run_id=run.id)
+    assert first.id == second.id
+
+    claimed = claim_job("worker-1")
+    assert claimed is not None
+    assert heartbeat_job(claimed["job_id"], "worker-1") is True
+    assert heartbeat_job(claimed["job_id"], "worker-2") is False
 
 
 def test_async_run_queue_and_worker():

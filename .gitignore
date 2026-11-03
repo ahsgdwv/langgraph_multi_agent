@@ -21,6 +21,9 @@ venv/
 # 本地代码索引
 .codebase-memory/
 
+# Chroma 跨进程锁文件
+data/.chroma.lock
+
 # 密钥与本地配置（切勿上传）
 .env
 

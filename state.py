@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import uuid
 from typing import Annotated, Literal, Optional, TYPE_CHECKING
 
@@ -119,6 +120,7 @@ class AgentState(TypedDict):
     run_metrics: RunMetrics
     supervisor_decision: str
     use_supervisor: bool
+    auto_approve_human: bool
 
 
 def create_initial_state(
@@ -128,7 +130,16 @@ def create_initial_state(
     max_retry: int = 2,
     simulate_fail_task_ids: Optional[list[str]] = None,
     use_supervisor: bool = True,
+    auto_approve_human: Optional[bool] = None,
 ) -> AgentState:
+    if auto_approve_human is None:
+        raw = os.getenv("AUTO_APPROVE_HUMAN")
+        auto_approve_human = raw is not None and raw.strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
     return AgentState(
         user_input=user_input,
         task_list=[],
@@ -144,6 +155,7 @@ def create_initial_state(
         run_metrics=RunMetrics(),
         supervisor_decision="",
         use_supervisor=use_supervisor,
+        auto_approve_human=auto_approve_human,
     )
 
 

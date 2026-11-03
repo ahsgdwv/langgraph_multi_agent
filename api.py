@@ -154,7 +154,6 @@ class PromptSaveRequest(BaseModel):
 def _run_to_finish(user_text: str, thread_id=None, max_retry=2, auto_approve=True):
     if not user_text or not user_text.strip():
         raise HTTPException(400, "user_input 不能为空")
-    os.environ["AUTO_APPROVE_HUMAN"] = "true" if auto_approve else "false"
 
     print(f"[api] run start tid={thread_id or 'new'} retry={max_retry}")
     with get_checkpointer() as cp:
@@ -162,6 +161,7 @@ def _run_to_finish(user_text: str, thread_id=None, max_retry=2, auto_approve=Tru
             user_text.strip(),
             thread_id=thread_id,
             max_retry=max_retry,
+            auto_approve_human=auto_approve,
             checkpointer=cp,
             verbose=False,
         )

@@ -63,6 +63,8 @@ CHECKPOINT_BACKEND=postgres
 POSTGRES_DSN=postgresql://fmcg:change-me@db:5432/fmcg
 ```
 
+Worker 使用数据库任务租约和心跳，重复投递会被去重，run 与 job 的收尾在同一个事务里完成；`auto_approve` 按每个 run 独立保存，不再依赖全局环境变量。Chroma 重建和检索也有跨进程锁，避免评测、worker 和主流程并发时互相破坏索引。
+
 原有 `POST /run` 仍保留为同步兼容接口，适合本地演示；企业接入建议使用 `/v1/runs`。
 
 依赖安装优先使用已验证的 `requirements.lock`。CI 会执行 ruff、pytest、原有 smoke suite 和依赖安全扫描；当前 Chroma 的已知漏洞与迁移建议记录在 `security/known-vulns.md`。

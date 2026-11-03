@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from infra.db import get_engine, session_scope
-from infra.models import JobRecord
+from infra.models import JobRecord, RunRecord
 from infra.settings import get_settings
 
 
@@ -19,6 +19,19 @@ def enqueue_job(
     payload: dict | None = None,
     max_attempts: int | None = None,
 ) -> JobRecord:
+    with session_scope() as session:
+        existing = (
+            session.query(JobRecord)
+            .filter(
+                JobRecord.run_id == run_id,
+                JobRecord.action == action,
+                JobRecord.status.in_(("pending", "running")),
+            )
+            .first()
+        )
+        if existing is not None:
+            return existing
+
     job = JobRecord(
         id=uuid4().hex,
         run_id=run_id,
@@ -56,7 +69,21 @@ def claim_job(worker_id: str) -> dict | None:
         return serialize_job(job)
 
 
-def complete_job(job_id: str) -> None:
+def heartbeat_job(job_id: str, worker_id: str) -> bool:
+    with session_scope() as session:
+        job = session.get(JobRecord, job_id)
+        if job is None or job.status != "running" or job.worker_id != worker_id:
+            return False
+        job.locked_at = _now()
+        return True
+
+
+def complete_job(
+    job_id: str,
+    *,
+    run_id: str | None = None,
+    run_fields: dict | None = None,
+) -> None:
     with session_scope() as session:
         job = session.get(JobRecord, job_id)
         if job is None:
@@ -64,9 +91,21 @@ def complete_job(job_id: str) -> None:
         job.status = "done"
         job.locked_at = None
         job.error = None
+        if run_id:
+            run = session.get(RunRecord, run_id)
+            if run is not None:
+                for key, value in (run_fields or {}).items():
+                    if hasattr(run, key):
+                        setattr(run, key, value)
 
 
-def fail_job(job_id: str, error: str, *, retry: bool = True) -> bool:
+def fail_job(
+    job_id: str,
+    error: str,
+    *,
+    retry: bool = True,
+    run_id: str | None = None,
+) -> bool:
     with session_scope() as session:
         job = session.get(JobRecord, job_id)
         if job is None:
@@ -78,9 +117,16 @@ def fail_job(job_id: str, error: str, *, retry: bool = True) -> bool:
             delay = min(60, 2 ** max(job.attempts, 0))
             job.status = "pending"
             job.available_at = _now() + timedelta(seconds=delay)
-            return True
-        job.status = "failed"
-        return False
+            should_retry = True
+        else:
+            job.status = "failed"
+            should_retry = False
+        if run_id:
+            run = session.get(RunRecord, run_id)
+            if run is not None:
+                run.status = "queued" if should_retry else "failed"
+                run.error = error[:4000]
+        return should_retry
 
 
 def cancel_jobs_for_run(run_id: str) -> None:

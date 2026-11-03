@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-import os
 import time
+from threading import Event, Thread
 from uuid import uuid4
 
 from infra.db import init_db
-from infra.job_queue import claim_job, complete_job, fail_job, reset_stale_jobs
+from infra.job_queue import (
+    claim_job,
+    complete_job,
+    fail_job,
+    heartbeat_job,
+    reset_stale_jobs,
+)
 from infra.logging import bind_context, clear_context, configure_logging, logger
 from infra.run_store import add_event, get_run_by_id, update_run
 from infra.settings import get_settings
@@ -38,8 +44,14 @@ def process_job(job: dict, worker_id: str) -> None:
         event_type="started",
         payload={"job_id": job["job_id"], "worker_id": worker_id},
     )
-    os.environ["AUTO_APPROVE_HUMAN"] = "true" if run.auto_approve else "false"
+    stop_heartbeat = Event()
 
+    def heartbeat_loop() -> None:
+        while not stop_heartbeat.wait(30):
+            heartbeat_job(job["job_id"], worker_id)
+
+    heartbeat = Thread(target=heartbeat_loop, daemon=True)
+    heartbeat.start()
     try:
         with get_checkpointer() as checkpointer:
             if job["action"] == "resume":
@@ -54,33 +66,36 @@ def process_job(job: dict, worker_id: str) -> None:
                     run.user_input,
                     thread_id=run.id,
                     max_retry=run.max_retry,
+                    auto_approve_human=run.auto_approve,
                     checkpointer=checkpointer,
                     verbose=False,
                 )
 
         status = "succeeded" if finished else "interrupted"
-        update_run(
-            run.id,
-            status=status,
-            final_output=state.get("final_output") or "",
-            metrics_json=_metrics_dict(state),
-            interrupt_json=interrupt_payload,
-            error=None,
-        )
         add_event(
             run_id=run.id,
             tenant_id=run.tenant_id,
             event_type=status,
             payload={"job_id": job["job_id"]},
         )
-        complete_job(job["job_id"])
+        complete_job(
+            job["job_id"],
+            run_id=run.id,
+            run_fields={
+                "status": status,
+                "final_output": state.get("final_output") or "",
+                "metrics_json": _metrics_dict(state),
+                "interrupt_json": interrupt_payload,
+                "error": None,
+            },
+        )
         logger.info("job_finished run_id=%s status=%s", run.id, status)
     except Exception as exc:
-        retry = fail_job(job["job_id"], str(exc), retry=True)
-        update_run(
-            run.id,
-            status="queued" if retry else "failed",
-            error=str(exc),
+        retry = fail_job(
+            job["job_id"],
+            str(exc),
+            retry=True,
+            run_id=run.id,
         )
         add_event(
             run_id=run.id,
@@ -90,6 +105,8 @@ def process_job(job: dict, worker_id: str) -> None:
         )
         logger.exception("job_failed run_id=%s retry=%s", run.id, retry)
     finally:
+        stop_heartbeat.set()
+        heartbeat.join(timeout=1)
         clear_context(tokens)
 
 
