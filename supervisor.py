@@ -22,10 +22,12 @@ SupervisorRoute = Literal[
 
 # 库存/备货属于执行类，优先于 SKU 等数据关键词
 _INVENTORY_KW = re.compile(r"库存|备货|补货|在库|可用库存|仓储|WMS", re.I)
+# 多源整合/周报类优先走数据分析角色
+_INTEGRATED_KW = re.compile(r"整合|多源|周报|月报|复盘|汇总报告")
 # 政策类优先于数据统计类
 _RESEARCHER_KW = re.compile(r"政策|文档|陈列|定价|合规|费用|进场|规则|FAQ|赔付")
 _DATA_ANALYST_KW = re.compile(
-    r"销量|销售额|同比|环比|SKU|排行|数据分析|统计|报表|SQL|pandas|整合|周报|月报|复盘|TOP|对比.*渠道|渠道.*对比|渠道.*销量"
+    r"销量|销售额|同比|环比|SKU|排行|数据分析|统计|报表|SQL|pandas|整合|周报|月报|复盘|TOP|份额|对比.*渠道|渠道.*对比|渠道.*销量"
 )
 
 
@@ -33,6 +35,8 @@ def pick_worker_for_task(task: SubTask) -> Literal["executor", "researcher", "da
     text = f"{task.title} {task.description}"
     if _INVENTORY_KW.search(text):
         return "executor"
+    if _INTEGRATED_KW.search(text):
+        return "data_analyst"
     if _RESEARCHER_KW.search(text):
         return "researcher"
     if _DATA_ANALYST_KW.search(text):

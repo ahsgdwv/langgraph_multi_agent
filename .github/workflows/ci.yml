@@ -25,6 +25,13 @@ jobs:
         run: ruff check .
       - name: Unit and integration tests
         run: pytest
+      - name: End-to-end task evaluation
+        run: >
+          python -m evals.task_eval
+          --min-task-success 0.9
+          --min-routing-accuracy 0.9
+          --min-skill-accuracy 0.9
+          --min-term-coverage 0.9
       - name: Legacy smoke suite and demo
         run: python main.py
 

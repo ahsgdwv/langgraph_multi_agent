@@ -77,6 +77,7 @@ class ChannelCompareSkill(BaseSkill):
     description = "对比便利店/商超/电商/特通渠道销售额"
     triggers = [r"渠道", r"便利店", r"商超", r"电商", r"特通", r"渠道对比", r"份额"]
     output_sections = ["数据概览", "关键发现", "建议动作"]
+    priority = 10
 
     def _execute(self, text: str, ctx: SkillContext) -> SkillOutput:
         df = run_readonly_sql(
@@ -115,6 +116,7 @@ class SkuRankingSkill(BaseSkill):
     description = "按销售额输出 TOP SKU"
     triggers = [r"SKU", r"排行", r"TOP", r"爆款", r"单品", r"品类"]
     output_sections = ["数据概览", "关键发现", "建议动作"]
+    priority = 20
 
     def _execute(self, text: str, ctx: SkillContext) -> SkillOutput:
         top_n = CFG.analytics.sku_top_n
@@ -151,6 +153,7 @@ class SalesTrendSkill(BaseSkill):
     description = "按月汇总销量与销售额"
     triggers = [r"趋势", r"同比", r"环比", r"月度", r"走势", r"销量变化"]
     output_sections = ["数据概览", "关键发现", "建议动作"]
+    priority = 20
 
     def _execute(self, text: str, ctx: SkillContext) -> SkillOutput:
         df = (
@@ -168,15 +171,23 @@ class SalesTrendSkill(BaseSkill):
             (df["revenue"].iloc[-1] - df["revenue"].iloc[0]) / df["revenue"].iloc[0] * 100
             if len(df) > 1 else 0
         )
+        mom = (
+            (df["revenue"].iloc[-1] - df["revenue"].iloc[-2])
+            / df["revenue"].iloc[-2]
+            * 100
+            if len(df) > 1
+            else 0
+        )
 
         return _pack(
             self,
-            f"覆盖 {len(df)} 个月",
+            f"月度趋势：覆盖 {len(df)} 个月",
             {
                 "数据概览": _table_md(records, ["sale_month", "units", "revenue"]),
                 "关键发现": (
                     f"- 峰值月：{peak['sale_month']}，销售额 {float(peak['revenue']):,.0f} 元\n"
-                    f"- 首尾月变化：{growth:+.1f}%"
+                    f"- 月度趋势：首尾月变化 {growth:+.1f}%\n"
+                    f"- 最新月环比：{mom:+.1f}%"
                 ),
                 "建议动作": "- 峰值月前两周加备货\n- 低增速月拆渠道定位原因",
             },
@@ -190,6 +201,7 @@ class PolicyLookupSkill(BaseSkill):
     description = "检索陈列费、定价、进场政策"
     triggers = [r"政策", r"陈列", r"定价", r"合规", r"费用", r"进场"]
     output_sections = ["政策摘要", "适用建议", "执行清单"]
+    priority = 30
 
     def _execute(self, text: str, ctx: SkillContext) -> SkillOutput:
         docs = retrieve_context(text, k=CFG.rag.default_k)
@@ -214,6 +226,7 @@ class IntegratedReportSkill(BaseSkill):
     description = "SQL + pandas + RAG 合成周报"
     triggers = [r"整合", r"多源", r"汇总报告", r"周报", r"月报", r"复盘"]
     output_sections = ["数据概览", "业务上下文", "关键发现", "建议动作"]
+    priority = 40
 
     def _execute(self, text: str, ctx: SkillContext) -> SkillOutput:
         channel_df = run_readonly_sql(

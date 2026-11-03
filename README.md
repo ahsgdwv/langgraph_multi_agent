@@ -39,6 +39,7 @@ GET  /prompt/templates  # ?mode=system|user|iterate
 python worker.py                         # 消费异步任务
 uvicorn api:app --port 8000              # API
 python -m evals.rag_eval --rebuild       # RAG 黄金集评测
+python -m evals.task_eval                # 路由/Skill/完整工作流评测
 pytest                                   # 企业化基础测试
 ```
 

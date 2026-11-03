@@ -1,0 +1,23 @@
+{"id":"channel_basic","type":"skill","input":"统计便利店、商超、电商、特通渠道销售额对比","expected_worker":"data_analyst","expected_skill":"channel_compare","expected_terms":["电商","便利店","销售额"]}
+{"id":"channel_share","type":"skill","input":"分析各渠道销售份额","expected_worker":"data_analyst","expected_skill":"channel_compare","expected_terms":["份额"]}
+{"id":"sku_top","type":"skill","input":"输出气泡水 SKU 销售 TOP 排行","expected_worker":"data_analyst","expected_skill":"sku_ranking","expected_terms":["SKU","TOP"]}
+{"id":"sku_single","type":"skill","input":"找出销售额最高的单品","expected_worker":"data_analyst","expected_skill":"sku_ranking","expected_terms":["TOP"]}
+{"id":"trend_month","type":"skill","input":"统计月度销量趋势","expected_worker":"data_analyst","expected_skill":"sales_trend","expected_terms":["月度","趋势"]}
+{"id":"trend_mom","type":"skill","input":"做销量环比分析","expected_worker":"data_analyst","expected_skill":"sales_trend","expected_terms":["环比"]}
+{"id":"policy_fee","type":"skill","input":"检索陈列费用政策","expected_worker":"researcher","expected_skill":"policy_lookup","expected_terms":["陈列","费用","政策"],"expected_sources":["fmcg_channel_policy.md"]}
+{"id":"policy_price","type":"skill","input":"商超定价与促销政策是什么","expected_worker":"researcher","expected_skill":"policy_lookup","expected_terms":["定价","政策"]}
+{"id":"policy_entry","type":"skill","input":"新品进场合规要求","expected_worker":"researcher","expected_skill":"policy_lookup","expected_terms":["进场","合规"]}
+{"id":"policy_channel_tie","type":"skill","input":"商超促销费用上限","expected_worker":"researcher","expected_skill":"policy_lookup","expected_terms":["费用"]}
+{"id":"inventory_default","type":"skill","input":"查询核心 SKU 渠道库存","expected_worker":"executor","expected_skill":"inventory_lookup","expected_terms":["可用","库存"]}
+{"id":"inventory_wms","type":"skill","input":"WMS 可用库存还有多少","expected_worker":"executor","expected_skill":"inventory_lookup","expected_terms":["可用","库存"]}
+{"id":"inventory_replenish","type":"skill","input":"库存不足需要备货","expected_worker":"executor","expected_skill":"inventory_lookup","expected_terms":["可用"]}
+{"id":"integrated_weekly","type":"skill","input":"整合销售数据与政策生成周报","expected_worker":"data_analyst","expected_skill":"integrated_report","expected_terms":["数据概览","关键发现"]}
+{"id":"integrated_review","type":"skill","input":"生成月度复盘报告","expected_worker":"data_analyst","expected_skill":"integrated_report","expected_terms":["数据概览"]}
+{"id":"sku_trend","type":"skill","input":"SKU 月度销量趋势","expected_worker":"data_analyst","expected_skill":"sales_trend","expected_terms":["月度","趋势"]}
+{"id":"policy_sku","type":"skill","input":"检索 SKU 定价政策","expected_worker":"researcher","expected_skill":"policy_lookup","expected_terms":["定价","政策"]}
+{"id":"inventory_channel","type":"skill","input":"各渠道库存对比","expected_worker":"executor","expected_skill":"inventory_lookup","expected_terms":["库存"]}
+{"id":"competitor","type":"skill","input":"调研竞品无糖气泡水市场动态","expected_worker":"executor","expected_skill":null,"expected_terms":[]}
+{"id":"vague","type":"skill","input":"帮我分析一下","expected_worker":"executor","expected_skill":null,"expected_terms":[]}
+{"id":"unknown_data","type":"skill","input":"查一下销售数据","expected_worker":"executor","expected_skill":null,"expected_terms":[]}
+{"id":"workflow_basic","type":"workflow","input":"统计渠道销量、输出SKU排行、检索陈列政策","expected_worker":"data_analyst","expected_skill":null,"expected_terms":["快消业务分析周报","完成：3 项"]}
+{"id":"workflow_inventory","type":"workflow","input":"统计渠道销量、查询核心 SKU 渠道库存、生成周报","expected_worker":"data_analyst","expected_skill":null,"expected_terms":["inventory_lookup","可用库存","快消业务分析周报"]}
